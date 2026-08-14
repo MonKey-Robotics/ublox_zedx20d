@@ -356,7 +356,11 @@ private:
       // Perform the request
       CURLcode res = curl_easy_perform(curlHandle_->handle);
 
-      // Reconfigure after perform returns (handle is idle) — tightest response to param changes
+      // make sure we dont do a fresh connect on the next cycle if we just did one
+      curl_easy_setopt(curlHandle_->handle, CURLOPT_FRESH_CONNECT, 0L);
+
+      // Reconfigure after perform returns (handle is idle)
+      // — tightest response to param changes
       if (reconfigure_needed_.load()) {
         std::lock_guard<std::mutex> lock(params_mutex_);
 

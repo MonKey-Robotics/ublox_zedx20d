@@ -56,6 +56,7 @@ public:
     declare_parameter("password", "password");
     declare_parameter("log_level", "INFO");
     declare_parameter("maxage_conn", 30);
+    declare_parameter("reconnect_every_n_cycles", 1000);
 
     use_https_ = get_parameter("use_https").as_bool();
     host_ = get_parameter("host").as_string();
@@ -65,6 +66,7 @@ public:
     password_ = get_parameter("password").as_string();
     log_level_ = get_parameter("log_level").as_string();
     maxage_conn_ = get_parameter("maxage_conn").as_int();
+    reconnect_every_n_cycles_ = get_parameter("reconnect_every_n_cycles").as_int();
 
     // Initialize pending values before registering callback to avoid race
     pending_use_https_ = use_https_;
@@ -75,6 +77,12 @@ public:
     pending_password_ = password_;
     pending_log_level_ = log_level_;
     pending_maxage_conn_ = maxage_conn_;
+    pending_reconnect_every_n_cycles_ = reconnect_every_n_cycles_;
+
+    // Every n cycles, the connection will be closed and re-established to avoid stale
+    // connections. This is useful for NTRIP casters that may close connections.
+    fresh_connect_.store(false);
+    fresh_connect_count_ = 0;
 
     // Register parameter change callback for runtime reconfiguration
     parameters_callback_handle_ =
@@ -150,6 +158,7 @@ private:
   std::string pending_password_;
   std::string pending_log_level_;
   long pending_maxage_conn_;
+  long pending_reconnect_every_n_cycles_;
 
   // NTRIP castor connection
   bool use_https_;
@@ -160,6 +169,10 @@ private:
   std::string password_;
   std::string log_level_;
   long maxage_conn_;
+  long reconnect_every_n_cycles_;
+
+  std::atomic<bool> fresh_connect_{false};
+  long fresh_connect_count_;
 
   rclcpp::Publisher<rtcm_msgs::msg::Message>::SharedPtr rtcm_pub_;
 
@@ -219,6 +232,8 @@ private:
         pending_log_level_ = param.as_string();
       } else if (name == "maxage_conn") {
         pending_maxage_conn_ = param.as_int();
+      } else if (name == "reconnect_every_n_cycles") {
+        pending_reconnect_every_n_cycles_ = param.as_int();
       }
     }
 
@@ -245,6 +260,24 @@ private:
     }
 
     curl_easy_setopt(handle, CURLOPT_MAXAGE_CONN, maxage_conn_);
+
+    curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 10L);
+
+    // NTRIP is an indefinite transfer: do not use CURLOPT_TIMEOUT.
+    // Instead, abort only when it has delivered effectively no data for 30 seconds.
+    curl_easy_setopt(handle, CURLOPT_LOW_SPEED_LIMIT, 1L);
+    curl_easy_setopt(handle, CURLOPT_LOW_SPEED_TIME, 30L);
+
+    curl_easy_setopt(handle, CURLOPT_TCP_KEEPALIVE, 1L);
+    curl_easy_setopt(handle, CURLOPT_TCP_KEEPIDLE, 20L);
+    curl_easy_setopt(handle, CURLOPT_TCP_KEEPINTVL, 10L);
+
+    curl_easy_setopt(handle, CURLOPT_FRESH_CONNECT, fresh_connect_ ? 1L : 0L);
+    if (fresh_connect_.load()) {
+      RCLCPP_DEBUG(this->get_logger(), "Forcing fresh connection to NTRIP caster");
+      fresh_connect_.store(false);
+      fresh_connect_count_ = 0;
+    }
   }
 
   static size_t WriteCallback(char * ptr, size_t size, size_t nmemb, void * userdata)
@@ -290,6 +323,14 @@ private:
 
       node->desired_count_reached_ = true;
 
+      node->fresh_connect_count_++;
+      if (node->fresh_connect_count_ >= node->reconnect_every_n_cycles_) {
+        RCLCPP_DEBUG(
+          node->get_logger(), "Reconnecting to NTRIP caster after %ld cycles",
+          node->fresh_connect_count_);
+        node->fresh_connect_.store(true);
+      }
+
       // Returning a value different from the received data size
       // will signal libcurl to stop receiving further data
       return size * nmemb - 1;
@@ -304,6 +345,13 @@ private:
   {
     while (!streaming_exit_.load()) {
       desired_count_reached_ = false;
+
+      if (fresh_connect_.load()) {
+        ApplyCurlOptions();
+        fresh_connect_.store(false);
+        fresh_connect_count_ = 0;
+        RCLCPP_WARN(this->get_logger(), "Fresh connection to NTRIP caster");
+      }
 
       // Perform the request
       CURLcode res = curl_easy_perform(curlHandle_->handle);
@@ -321,6 +369,7 @@ private:
         password_ = pending_password_;
         log_level_ = pending_log_level_;
         maxage_conn_ = pending_maxage_conn_;
+        reconnect_every_n_cycles_ = pending_reconnect_every_n_cycles_;
 
         // Reconfigure curl with new values
         ApplyCurlOptions();
@@ -361,6 +410,8 @@ private:
 
           // Sleep for 1 second
           rclcpp::sleep_for(std::chrono::seconds(1));
+
+          fresh_connect_.store(true);
         }
       }
     }

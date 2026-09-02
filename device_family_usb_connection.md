@@ -101,8 +101,15 @@ Device Descriptor:
 | **F9R**       | 2 (Control+Data) | CDC-ACM (2/10) | CDC line state required | u-center programmed | 0x01a9 |
 | **X20P (F9P-compatible)** | 2 (Control+Data) | CDC-ACM (2/10) | CDC line state required | u-center programmed | 0x01ab (priority) |
 | **X20P (UART1/UART2)** | 1 (Combined)     | Vendor (255)   | No control transfers    | Factory programmed | 0x050c, 0x050d |
+| **X20D**      | 2 (Control+Data) | CDC-ACM (2/10) | CDC line state required | u-center programmed | 0x01ab |
 
 **Note**: X20P presents as three separate USB devices. The 0x01ab interface is architecturally identical to F9P/F9R.
+
+**Note**: The ZED-X20D (dual-antenna heading, HDG firmware) uses the same default
+`CFG-USB-PRODUCT_ID` 0x01ab as the X20P main interface and the same CDC-ACM two-interface
+architecture, so it takes the standard connection path with no USB-layer special casing.
+Like F9P/F9R sharing 0x01a9, the family cannot be auto-detected from the product ID —
+it is declared via the `DEVICE_FAMILY` parameter.
 
 ### Serial String (iSerial) Architecture
 

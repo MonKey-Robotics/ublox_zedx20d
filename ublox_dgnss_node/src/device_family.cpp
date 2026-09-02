@@ -43,13 +43,23 @@ const std::map<DeviceFamily, DeviceFamilyInfo> DEVICE_FAMILY_MAP = {
       false,  // sensor_fusion_capable
       true,  // reliable_iserial (factory set for 0x050c/0x050d, user-programmed for 0x01ab)
       true   // dual_uart_capable
+    }},
+  {DeviceFamily::X20D, {
+      "X20D",
+      {0x01ab},  // Same default product ID as the X20P main interface (CFG-USB-PRODUCT_ID 427)
+                 // ASSUMED(X20D): confirm with lsusb that no UART bridge PIDs exist
+      "X20D - All-band dual-antenna heading GNSS",
+      false,  // sensor_fusion_capable
+      false,  // reliable_iserial - ASSUMED(X20D): flip if the factory iSerial proves stable
+      false  // dual_uart_capable
     }}
 };
 
 const std::map<std::string, DeviceFamily> DEVICE_FAMILY_LOOKUP = {
   {"F9P", DeviceFamily::F9P},
   {"F9R", DeviceFamily::F9R},
-  {"X20P", DeviceFamily::X20P}
+  {"X20P", DeviceFamily::X20P},
+  {"X20D", DeviceFamily::X20D}
 };
 
 DeviceFamily string_to_device_family(const std::string & family_str)

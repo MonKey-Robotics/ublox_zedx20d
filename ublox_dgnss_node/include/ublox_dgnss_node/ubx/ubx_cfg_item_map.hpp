@@ -57,8 +57,11 @@ const ubx_cfg_item_t CFG_UART1OUTPROT_RTCM3X = {"CFG_UART1OUTPROT_RTCM3X", 0x107
 const ubx_cfg_item_t CFG_UART2_BAUDRATE = {"CFG_UART2_BAUDRATE", 0x40530001, U4, 1, NA};
 
 // cfg uart2inprot
+// UART2 on the X20D HDG firmware accepts only RTCM3X and SPARTN input
+// @exclude: X20D
 const ubx_cfg_item_t CFG_UART2INPROT_UBX = {"CFG_UART2INPROT_UBX", 0x10750001, L, 1, NA};
 const ubx_cfg_item_t CFG_UART2INPROT_NMEA = {"CFG_UART2INPROT_NMEA", 0x10750002, L, 1, NA};
+
 const ubx_cfg_item_t CFG_UART2INPROT_RTCM3X = {"CFG_UART2INPROT_RTCM3X", 0x10750004, L, 1, NA};
 const ubx_cfg_item_t CFG_UART2INPROT_SPARTN = {"CFG_UART2INPROT_SPARTN", 0x10750005, L, 1, NA};
 
@@ -145,7 +148,8 @@ const ubx_cfg_item_t CFG_NAVCOR_ENABLE_GAL_HAS =
 const ubx_cfg_item_t CFG_SPARTN_USE_SOURCE = {"CFG_SPARTN_USE_SOURCE", 0x20a70001, E1, 1, NA};
 
 // cfg tmode - time mode configuration
-// @exclude: F9R
+// not on the X20D: RTK rover only, no survey-in / fixed base mode
+// @exclude: F9R,X20D
 const ubx_cfg_item_t CFG_TMODE_MODE = {"CFG_TMODE_MODE", 0x20030001, E1, 1, NA};
 enum CFG_TMODE_MODE_ENUM {DISABLED = 0, SURVEY_IN = 1, FIXED = 2};
 const ubx_cfg_item_t CFG_TMODE_POS_TYPE = {"CFG_TMODE_POS_TYPE", 0x20030002, E1, 1, NA};
@@ -215,6 +219,12 @@ enum CFG_NAVSPG_DYNMODEL_ENUM
   DYN_MODEL_MOWER = 11,       // Robotic lawn mower (not available in all products)
   DYN_MODEL_ESCOOTER = 12,    // E-scooter (not available in all products)
 };
+
+// User-defined offset between the dual-antenna baseline and the vehicle forward
+// direction; the device applies it to relPosHeading in UBX-NAV-DAHEADING
+// @only: X20D
+const ubx_cfg_item_t CFG_NAVSPG_DAHEADING_OFFSET =
+{"CFG_NAVSPG_DAHEADING_OFFSET", 0x401100e4, I4, 1e-2, DEG};
 
 // cfg odo
 // Odometer feature only supported on F9P/F9R (removed in X20P HPG 2.10)
@@ -293,6 +303,12 @@ const ubx_cfg_item_t CFG_MSGOUT_UBX_NAV_CLOCK_USB =
 {"CFG_MSGOUT_UBX_NAV_CLOCK_USB", 0x20910068, U1, 0, NA};
 const ubx_cfg_item_t CFG_MSGOUT_UBX_NAV_COV_USB =
 {"CFG_MSGOUT_UBX_NAV_COV_USB", 0x20910086, U1, 0, NA};
+
+// UBX-NAV-DAHEADING dual-antenna heading only supported on the X20D (HDG 2.00)
+// @only: X20D
+const ubx_cfg_item_t CFG_MSGOUT_UBX_NAV_DAHEADING_USB =
+{"CFG_MSGOUT_UBX_NAV_DAHEADING_USB", 0x209103e2, U1, 0, NA};
+
 const ubx_cfg_item_t CFG_MSGOUT_UBX_NAV_DOP_USB =
 {"CFG_MSGOUT_UBX_NAV_DOP_USB", 0x2091003b, U1, 0, NA};
 const ubx_cfg_item_t CFG_MSGOUT_UBX_NAV_EOE_USB =
@@ -341,7 +357,7 @@ const ubx_cfg_item_t CFG_MSGOUT_UBX_SEC_SIG_USB =
 const ubx_cfg_item_t CFG_MSGOUT_UBX_SEC_SIGLOG_USB =
 {"CFG_MSGOUT_UBX_SEC_SIGLOG_USB", 0x2091068c, U1, 0, NA};
 
-// @exclude: X20P
+// @exclude: X20P,X20D
 const ubx_cfg_item_t CFG_MSGOUT_UBX_RXM_RTCM_USB =
 {"CFG_MSGOUT_UBX_RXM_RTCM_USB", 0x2091026b, U1, 0, NA};
 const ubx_cfg_item_t CFG_MSGOUT_UBX_RXM_SPARTN_USB =
@@ -372,7 +388,8 @@ const ubx_cfg_item_t CFG_MSGOUT_UBX_RXM_COR_UART2 =
 {"CFG_MSGOUT_UBX_RXM_COR_UART2", 0x209106b8, U1, 0, NA};
 
 // Support both USB type and UART2 type messages simultaneously
-// @exclude: F9R
+// not on the X20D: no RTCM output on the HDG firmware
+// @exclude: F9R,X20D
 const ubx_cfg_item_t CFG_MSGOUT_RTCM_3X_TYPE1005_USB =
 {"CFG_MSGOUT_RTCM_3X_TYPE1005_USB", 0x209102c0, U1, 0, NA};
 const ubx_cfg_item_t CFG_MSGOUT_RTCM_3X_TYPE1077_USB =
@@ -412,7 +429,7 @@ const ubx_cfg_item_t CFG_MSGOUT_RTCM_3X_TYPE1006_USB =
 // {"CFG_MSGOUT_RTCM_3X_TYPE1006_SPI", 0x209102c6, U1, 0, NA};
 
 // RTCM-3X-TYPE4072_0 reference station PVT (moving base) - UART2 + USB enabled
-// @exclude: F9R
+// @exclude: F9R,X20D
 const ubx_cfg_item_t CFG_MSGOUT_RTCM_3X_TYPE4072_0_UART2 =
 {"CFG_MSGOUT_RTCM_3X_TYPE4072_0_UART2", 0x20910300, U1, 0, NA};
 const ubx_cfg_item_t CFG_MSGOUT_RTCM_3X_TYPE4072_0_USB =
@@ -494,6 +511,7 @@ ubx_cfg_item_map_t ubxKeyCfgItemMap = {
   {CFG_NAVSPG_INIFIX3D.ubx_key_id, CFG_NAVSPG_INIFIX3D},
   {CFG_NAVSPG_UTCSTANDARD.ubx_key_id, CFG_NAVSPG_UTCSTANDARD},
   {CFG_NAVSPG_DYNMODEL.ubx_key_id, CFG_NAVSPG_DYNMODEL},
+  {CFG_NAVSPG_DAHEADING_OFFSET.ubx_key_id, CFG_NAVSPG_DAHEADING_OFFSET},
 
   {CFG_SEC_SPOOFDET_SIM_SIG_DIS.ubx_key_id, CFG_SEC_SPOOFDET_SIM_SIG_DIS},
   {CFG_SEC_JAMDET_SENSITIVITY_HI.ubx_key_id, CFG_SEC_JAMDET_SENSITIVITY_HI},
@@ -561,6 +579,7 @@ ubx_cfg_item_map_t ubxKeyCfgItemMap = {
   {CFG_MSGOUT_UBX_NAV_SVIN_USB.ubx_key_id, CFG_MSGOUT_UBX_NAV_SVIN_USB},
   {CFG_MSGOUT_UBX_NAV_CLOCK_USB.ubx_key_id, CFG_MSGOUT_UBX_NAV_CLOCK_USB},
   {CFG_MSGOUT_UBX_NAV_COV_USB.ubx_key_id, CFG_MSGOUT_UBX_NAV_COV_USB},
+  {CFG_MSGOUT_UBX_NAV_DAHEADING_USB.ubx_key_id, CFG_MSGOUT_UBX_NAV_DAHEADING_USB},
   {CFG_MSGOUT_UBX_NAV_DOP_USB.ubx_key_id, CFG_MSGOUT_UBX_NAV_DOP_USB},
   {CFG_MSGOUT_UBX_NAV_EOE_USB.ubx_key_id, CFG_MSGOUT_UBX_NAV_EOE_USB},
   {CFG_MSGOUT_UBX_NAV_POSECEF_USB.ubx_key_id, CFG_MSGOUT_UBX_NAV_POSECEF_USB},

@@ -27,12 +27,13 @@ enum class DeviceFamily
 {
   F9P,    // High-precision GNSS (product ID 0x01a9)
   F9R,    // High-precision GNSS with sensor fusion (product ID 0x01a9)
-  X20P    // All-band GNSS with three USB interfaces (product IDs 0x01ab, 0x050c, 0x050d)
+  X20P,   // All-band GNSS with three USB interfaces (product IDs 0x01ab, 0x050c, 0x050d)
+  X20D    // All-band dual-antenna heading GNSS (product ID 0x01ab)
 };
 
 struct DeviceFamilyInfo
 {
-  std::string name;                    // Short name: "F9P", "F9R", "X20P"
+  std::string name;                    // Short name: "F9P", "F9R", "X20P", "X20D"
   std::vector<uint16_t> product_ids;   // USB product IDs (multiple for X20P)
   std::string description;             // Full description for logging
   bool sensor_fusion_capable;          // F9R wheel tick and ESF support

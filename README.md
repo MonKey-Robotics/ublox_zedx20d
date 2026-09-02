@@ -8,7 +8,7 @@ RTCM messages can be delivered externally. Alternately the ntrip_client_node can
 
 Work has started on SPARTN support - basic commands are available to enable it on the device and to confirm that the messages are being used (when delivered to the device).
 
-This driver supports multiple u-blox device families including ZED-F9P, ZED-F9R, and X20P connected via USB, under Ubuntu 22.04/24.04/26.04. The driver uses libusb api 1.0 and automatically adapts to different USB architectures (CDC-ACM for F9 family, Vendor-Specific for X20P).
+This driver supports multiple u-blox device families including ZED-F9P, ZED-F9R, ZED-X20P, and ZED-X20D connected via USB, under Ubuntu 22.04/24.04/26.04. The driver uses libusb api 1.0 and automatically adapts to different USB architectures (CDC-ACM for F9 family, Vendor-Specific for X20P).
 
 This release works with Rolling, Kilted, Jazzy and Humble.
 
@@ -19,7 +19,7 @@ You may need to create a udev rule as follows:
 # UBLOX ZED-F9P/F9R (CDC-ACM)
 ATTRS{idVendor}=="1546", ATTRS{idProduct}=="01a9", MODE="0666", GROUP="plugdev", ENV{ID_MM_DEVICE_IGNORE}="1"
 
-# UBLOX ZED-X20P (CDC-ACM) - SUPPORTED
+# UBLOX ZED-X20P main interface / ZED-X20D (CDC-ACM, shared product ID) - SUPPORTED
 ATTRS{idVendor}=="1546", ATTRS{idProduct}=="01ab", MODE="0666", GROUP="plugdev", ENV{ID_MM_DEVICE_IGNORE}="1"
 # UBLOX X20P UART1 (Vendor-Specific) - NOT SUPPORTED
 ATTRS{idVendor}=="1546", ATTRS{idProduct}=="050c", MODE="0666", GROUP="plugdev", ENV{ID_MM_DEVICE_IGNORE}="1"
@@ -55,6 +55,32 @@ ros2 launch ublox_dgnss ublox_x20p_rover_hpposllh_navsatfix.launch.py
 ```
 
 otherwise all other launch files have been modified such that adding `-- DEVICE_FAMILY:=x20p` will enable the launch file and UBLOX NODE to connect to a ZED-X20P main interface. If not added the launch files default to the f9p device family.
+
+## ZED-X20D support
+
+The UBLOX ZED-X20D is the dual-antenna heading variant of the X20 platform. It runs the
+HDG firmware line (minimum HDG 2.00) rather than the X20P's HPG line, and publishes heading
+in the new `UBX-NAV-DAHEADING` (0x01 0x45) message on `/ubx_nav_da_heading`. Key points:
+
+- **USB product ID 0x01ab** - the same default as the X20P main interface, so the X20P udev
+  rule above covers it. Select the family explicitly with `DEVICE_FAMILY:=x20d`.
+- **RTK rover only** - the X20D cannot act as a base station. Survey-in / `CFG_TMODE_*`,
+  RTCM output and the `UBX-RXM-RTCM` status message do not exist on the HDG firmware and are
+  excluded from `x20d_ubx_config.toml`. RTCM3 correction *input* works as usual.
+- Heading is the clockwise angle from True North of the antenna 1 to antenna 2 baseline.
+  `CFG_NAVSPG_DAHEADING_OFFSET` (raw units 0.01 deg) rotates the reported heading so it
+  represents the vehicle forward direction when the baseline is mounted at an angle.
+- The `ublox_heading_imu_node` package converts `/ubx_nav_da_heading` into a
+  `sensor_msgs/Imu` yaw-only orientation on `heading/imu` for `robot_localization`,
+  gated on the receiver's validity flags and carrier solution status.
+
+```zsh
+ros2 launch ublox_dgnss ublox_x20d_rover_heading.launch.py
+```
+
+See [docs/x20d-bringup.md](docs/x20d-bringup.md) for firmware requirements, antenna rules
+and the hardware bring-up checklist, and [docs/x20d-port-notes.md](docs/x20d-port-notes.md)
+for what has been verified against documentation versus on hardware.
 
 ## Start commands
 

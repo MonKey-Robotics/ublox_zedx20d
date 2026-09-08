@@ -46,11 +46,11 @@ const std::map<DeviceFamily, DeviceFamilyInfo> DEVICE_FAMILY_MAP = {
     }},
   {DeviceFamily::X20D, {
       "X20D",
-      {0x01ab},  // Same default product ID as the X20P main interface (CFG-USB-PRODUCT_ID 427)
-                 // ASSUMED(X20D): confirm with lsusb that no UART bridge PIDs exist
+      {0x01ab},  // Same default product ID as the X20P main interface (CFG-USB-PRODUCT_ID 427);
+                 // lsusb on a simpleRTK4 Dual shows this single CDC-ACM device only
       "X20D - All-band dual-antenna heading GNSS",
       false,  // sensor_fusion_capable
-      false,  // reliable_iserial - ASSUMED(X20D): flip if the factory iSerial proves stable
+      false,  // reliable_iserial (iSerial is empty on the simpleRTK4 Dual)
       false  // dual_uart_capable
     }}
 };

@@ -1805,7 +1805,10 @@ public:
       bool any_params_added = false;
       std::string item_list;
       size_t i = 0;
-      size_t n = 10;  // every n output a request
+      // UBX-CFG-VALSET carries at most 64 key-value pairs; the X20D HDG
+      // firmware NAKs a VALSET that arrives while the previous one is still
+      // being processed, so send as few frames as possible
+      const size_t n = 64;
       for (const std::string & param_name : param_names) {
         const ubx::cfg::ubx_cfg_item_t * cfg_item =
           parameter_manager_->find_config_item(param_name);
@@ -3970,9 +3973,11 @@ private:
     ubx_cfg_->cfg_val_set_transaction(0);     // transactionless
 
     std::string item_list;
-    size_t i = 0;
-    size_t n = 10;     // every n send a request
-    // size_t n = 1;     // use to debug and find specific params faster
+    // UBX-CFG-VALSET carries at most 64 key-value pairs. Send as few frames as
+    // possible: the X20D HDG firmware NAKs a VALSET that arrives while the
+    // previous one is still being processed, so a burst of small frames loses
+    // most of them.
+    const size_t n = 64;
     size_t user_params_sent = 0;
 
     parameter_manager_->iterate_config_items(
@@ -3999,14 +4004,12 @@ private:
           }
         }
 
-        // every n send a poll request and reset the keys
-        if (++i % n == 0) {
-          if (ubx_cfg_->cfg_val_set_cfgdata_size() > 0) {
-            RCLCPP_DEBUG(get_logger(), "cfg_val_set_poll_async ... %s", item_list.c_str());
-            item_list = "";
-            ubx_cfg_->cfg_val_set_poll_async();
-            ubx_cfg_->cfg_val_set_cfgdata_clear();
-          }
+        // every n user params send a request and reset the keys
+        if (user_params_sent % n == 0 && ubx_cfg_->cfg_val_set_cfgdata_size() > 0) {
+          RCLCPP_DEBUG(get_logger(), "cfg_val_set_poll_async ... %s", item_list.c_str());
+          item_list = "";
+          ubx_cfg_->cfg_val_set_poll_async();
+          ubx_cfg_->cfg_val_set_cfgdata_clear();
         }
       });
 

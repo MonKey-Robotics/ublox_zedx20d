@@ -27,27 +27,56 @@ variant is pre-production (not in the HDG 2.00 interface description) and is del
 not parsed: `NavDAHeadingPayload` accepts version 0x02 only and the node drops anything
 else with a throttled warning.
 
-## Still assumed - confirm when hardware arrives
+## Confirmed on hardware (2026-09-04, simpleRTK4 Dual, HDG 2.00)
 
-- The X20D actually enumerates as `1546:01ab` with **2 CDC-ACM interfaces** (control +
-  data) like the X20P main interface, and exposes **no** vendor-specific UART bridge PIDs
-  analogous to the X20P's 0x050c/0x050d. `product_ids` in `device_family.cpp` lists only
-  0x01ab; if `lsusb` shows bridge PIDs they must be added there and blocked the way the
-  X20P ones are (`usb.cpp`).
-- `reliable_iserial = false` (conservative, F9-style). If the board reports a stable
-  factory iSerial, flip it.
-- The x20d TOML include-list was derived by diffing this driver's key list against the
-  interface description; the live device's VALGET/NAK behaviour is the final authority.
-- `CFG_RATE_NAV`/`CFG_RATE_MEAS` limits for DAHEADING output (data sheet: 1 Hz default,
-  up to 10 Hz).
-- The sign of the athwartships mounting offset (+90 vs -90 in 0.01 deg raw units) for
-  `CFG_NAVSPG_DAHEADING_OFFSET`.
+- `lsusb`: `1546:01ab`, 2 interfaces (CDC control + CDC data), endpoints 0x83 comms-in,
+  0x01 data-out, 0x82 data-in - the standard CDC-ACM path, **no** UART-bridge PIDs.
+  `iSerial` is empty, so `reliable_iserial = false` is right and `DEVICE_SERIAL_STRING`
+  must stay empty.
+- `UBX-MON-VER`: `MOD=ZED-X20D`, `FWVER=HDG 2.00`, `PROTVER=57.02`.
+- NAV-DAHEADING v2 parse verified end to end: `atan2(relPosE, relPosN)` and
+  `sqrt(N^2+E^2+D^2)` reproduce `relPosHeading` and `relPosLength` exactly; a 1 m bench
+  baseline was reported as 979 mm.
+- All 92 keys of `x20d_ubx_config.toml` answer `CFG-VALGET`; the 8 launch-file keys answer
+  `CFG-VALSET` individually and as one frame (57 B, 64 B and 97 B frames all ACK).
+- `CFG_NAVSPG_DAHEADING_OFFSET` accepts -18000 < v < 18000 (+/-180 deg in raw 0.01 deg);
+  anything outside NAKs.
+- **The HDG firmware NAKs any CFG-VALSET that arrives while the previous one is still
+  being processed**: six small frames back to back answer `NNNNNA`, the same six one at a
+  time answer `AAAAAA`. The driver's startup batching counted `n = 10` over iterated
+  config items, i.e. 1-2 keys per frame in a 2 ms burst, so most launch parameters were
+  lost on every other start. Fixed: one frame per 64 keys (the UBX maximum) in both the
+  startup and the runtime sender.
+- MON-RF / MON-SPAN are only ever emitted for antenna 1 (`recInf.msgSource = 1`) over USB,
+  even while the heading is valid - their absence for antenna 2 means nothing.
+- Heading validity vs `CFG_RATE_MEAS` (root port, no USB events at any rate): 1000 ms holds
+  `relPosHeadingValid = 1`, `carrSoln = 2`, accuracy 0.6-0.9 deg indefinitely and re-fixes
+  within seconds after a rate change. 333 ms (3 Hz) loses the heading within ~10 s, 200 ms
+  falls back to 1 Hz output with the heading lost, 100 ms streams ~8 Hz with `carrSoln = 0`;
+  250 ms held for one 15 s window at 3.4 deg accuracy, i.e. coasting. Behind the bus-powered
+  hub chain the module additionally dropped off the bus when set to 100 ms (kernel:
+  re-enumerating as low-speed, descriptor read errors) - that part was power. Launch default
+  is 1000 ms; 500 ms (2 Hz) was also verified for 45 s at 0.61-0.63 deg, so 1-2 Hz is the
+  usable range.
+- Bench geometry: antenna 1 (RF1) on the left, antenna 2 (RF2) on the right, 1 m apart,
+  "vehicle" facing west. Raw `relPosHeading` with offset 0 read 2-6 deg (the left-to-right
+  baseline points north), and with `CFG_NAVSPG_DAHEADING_OFFSET = -9000` it read 270 deg =
+  west. That is the athwartships case documented in the bring-up guide: RF1 left / RF2 right
+  needs -9000, the mirror mount needs +9000.
+
+## Still open
+
+- The startup CFG-VALGET fetch is also sent in bursts; one DEBUG run logged
+  `Missing response` for six keys and the driver ran degraded for them (harmless, but an
+  ACK-paced sender would remove the race for both VALGET and VALSET).
+- Offset sign on the robot: the bench had the baseline along the heading; an athwartships
+  mount needs +/-9000 as described in the bring-up guide.
 
 The full procedure is in [x20d-bringup.md](x20d-bringup.md).
 
 ## Corrections to earlier working assumptions
 
-- The USB PID did not need to be guessed: the interface description publishes the
+- The USB PID did not need to be guessed (and lsusb later confirmed it): the interface description publishes the
   `CFG-USB-PRODUCT_ID` default (427 = 0x01ab). It collides with the X20P main interface
   by design; the driver already treats the family as declared (F9P/F9R share 0x01a9).
 - `NAV-SVIN` msgout keys and `CFG-SIGNAL-PLAN` **do** exist on the HDG firmware, so they

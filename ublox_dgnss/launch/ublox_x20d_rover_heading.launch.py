@@ -15,6 +15,7 @@ def generate_launch_description():
   frame_id = LaunchConfiguration('frame_id')
   daheading_offset = LaunchConfiguration('daheading_offset')
   min_carr_soln = LaunchConfiguration('min_carr_soln')
+  heading_frame_id = LaunchConfiguration('heading_frame_id')
 
   log_level_arg = DeclareLaunchArgument(
     "log_level", default_value=TextSubstitution(text="INFO")
@@ -48,12 +49,23 @@ def generate_launch_description():
     description="Minimum carrier solution to publish heading/imu:"
                 " 0 = any, 1 = RTK float, 2 = RTK fixed"
   )
+  heading_frame_id_arg = DeclareLaunchArgument(
+    "heading_frame_id",
+    default_value="",
+    description="frame_id for heading/imu; empty keeps the driver frame_id. With"
+                " CFG_NAVSPG_DAHEADING_OFFSET set so the heading is the vehicle"
+                " forward direction, use the robot base_link frame so"
+                " robot_localization does not rotate it by the antenna mounting"
+  )
 
   params = [{"DEVICE_FAMILY": device_family},
             {'DEVICE_SERIAL_STRING': device_serial_string},
             {'FRAME_ID': frame_id},
             {'CFG_USBOUTPROT_NMEA': False},
-            {'CFG_RATE_MEAS': 100},
+            # 1 Hz: on HDG 2.00 the dual-antenna heading never resolves at a
+            # 100 ms measurement period (relPosHeadingValid stays 0); 1000 ms
+            # fixes within seconds
+            {'CFG_RATE_MEAS': 1000},
             {'CFG_RATE_NAV': 1},
             # USB output (0x01ab CDC-ACM interface)
             {'CFG_MSGOUT_UBX_NAV_DAHEADING_USB': 1},
@@ -108,7 +120,8 @@ def generate_launch_description():
         plugin='ublox_heading_imu::UbloxHeadingImuNode',
         name='ublox_heading_imu',
         namespace=namespace,
-        parameters=[{'min_carr_soln': ParameterValue(min_carr_soln, value_type=int)}]
+        parameters=[{'min_carr_soln': ParameterValue(min_carr_soln, value_type=int)},
+                    {'frame_id': heading_frame_id}]
       )
     ]
   )
@@ -121,6 +134,7 @@ def generate_launch_description():
     frame_id_arg,
     daheading_offset_arg,
     min_carr_soln_arg,
+    heading_frame_id_arg,
     container1,
     container2,
     container3,

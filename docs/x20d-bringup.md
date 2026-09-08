@@ -1,8 +1,8 @@
 # ZED-X20D bring-up guide
 
 Hardware bring-up and verification procedure for the dual-antenna heading support.
-Run through this once when the module first arrives, and clear the matching
-`ASSUMED(X20D)` markers in the tree as each step passes.
+Steps 1-4 were completed on a simpleRTK4 Dual on 2026-09-04 (see
+[x20d-port-notes.md](x20d-port-notes.md)); re-run them on any new board or firmware.
 
 ## Requirements
 
@@ -15,7 +15,20 @@ Run through this once when the module first arrives, and clear the matching
 - Heading definition: clockwise angle from True North of the baseline from **antenna 1
   (GPS1, master)** to **antenna 2 (GPS2, slave)**. On the ArduSimple simpleRTK4 Dual,
   the POWER+GPS USB-C port is the module's native USB - use that port.
-- udev rule: the shared `1546:01ab` rule in the top-level README covers the X20D.
+- udev: install the `1546:01ab` rule from the top-level README. Its
+  `ENV{ID_MM_DEVICE_IGNORE}="1"` is not optional - without it ModemManager opens
+  `/dev/ttyACM0` exclusively and the libusb claim fails with `LIBUSB_ERROR_BUSY`.
+- USB power: connect the board to a root port or a powered hub. Behind a bus-powered hub
+  chain the module dropped off the bus (re-enumerating as low-speed with descriptor
+  errors) as soon as the measurement rate was raised to 10 Hz.
+- Measurement rate: keep `CFG_RATE_MEAS` at 1000 ms (the launch default). On a root port
+  the dual-antenna fix holds at 1 Hz and 2 Hz (0.6-0.9 deg) but is lost within seconds at
+  3 Hz and above; 4 Hz only coasts briefly at ~3.4 deg. Use 500 ms if the EKF needs 2 Hz. Changing the rate at runtime
+  (`ros2 param set /ublox_dgnss CFG_RATE_MEAS ...`) is fine and the fix returns within
+  seconds after going back to 1000 ms.
+- Only one process may own the device. A stale driver holding the USB interface makes a
+  new one fail with `LIBUSB_ERROR_BUSY`; a driver that is started while the device is
+  absent logs `Starting USB initialization` every 10 ms until it appears.
 
 ## Checklist
 
@@ -54,10 +67,11 @@ Run through this once when the module first arrives, and clear the matching
      publishing.
    - Feed RTCM corrections (NTRIP): `carr_soln.status` should reach 2 and, with the
      default `min_carr_soln = 2`, `heading/imu` should resume.
-7. **Rates** - raise `CFG_RATE_MEAS`/`CFG_RATE_NAV` toward the 10 Hz limit and confirm
-   DAHEADING keeps up without gaps.
-8. Remove the `ASSUMED(X20D)` markers that each step clears, and update
-   [x20d-port-notes.md](x20d-port-notes.md).
+7. **Rates** - only if a faster heading is really needed: raise `CFG_RATE_MEAS` in steps
+   and at each step confirm `rel_pos_heading_valid` stays 1 for a full minute (not just
+   the first seconds) and `dmesg` shows no USB re-enumeration. On HDG 2.00 expect 1 Hz to
+   be the usable rate.
+8. Record the results in [x20d-port-notes.md](x20d-port-notes.md).
 
 ## robot_localization notes
 

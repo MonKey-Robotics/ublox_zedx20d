@@ -77,6 +77,8 @@ The system uses a sophisticated parameter state machine with thread-safe operati
 - `PARAM_LOADED`: Retrieved from GPS device
 - `PARAM_VALSET`: Sent to GPS device
 - `PARAM_VALGET`: Reading from GPS device
+- `PARAM_VERIFIED`: User value sent and read back from the device RAM layer (config engine)
+- `PARAM_ACKNAK`: Device NAKed the key on its own (bad value); dropped, never sent again
 
 **Parameter Value Sources:**
 - `UNKNOWN`: Parameter exists but value unknown (std::nullopt)
@@ -88,8 +90,9 @@ The system uses a sophisticated parameter state machine with thread-safe operati
 ```
 PARAM_INITIAL → PARAM_VALGET → PARAM_LOADED        (device fetch)
 PARAM_LOADED → PARAM_VALGET → PARAM_LOADED         (hot plug re-fetch)
-PARAM_USER → PARAM_VALSET → PARAM_LOADED           (user override)
-PARAM_LOADED → PARAM_VALSET → PARAM_LOADED         (modify device value)
+PARAM_USER → PARAM_VALSET → PARAM_VERIFIED         (user override, readback matched)
+PARAM_USER → PARAM_ACKNAK                          (device NAKed the key on its own)
+PARAM_VERIFIED / PARAM_VALSET → PARAM_USER         (USB detach; re-applied on re-attach)
 ```
 
 **Key Classes:**
@@ -98,10 +101,22 @@ PARAM_LOADED → PARAM_VALSET → PARAM_LOADED         (modify device value)
 - Uses `set_parameter_cache()` for initialization and `update_parameter_cache()` for state transitions
 - **Critical Fix**: Parameter initialization timing issue resolved - constructor now properly retrieves parameter values
 
-**3-Phase Parameter Initialization:**
-1. **Phase 1**: `ublox_send_user_params_async()` - Send ALL user parameters to device FIRST (highest priority)
-2. **Phase 2**: `ublox_declare_missing_params()` - Declare missing parameters as PARAM_INITIAL  
-3. **Phase 3**: `ublox_fetch_device_params_async()` - Fetch device parameter values
+**Startup configuration (config engine, `config_engine.hpp`):**
+1. **Handshake**: poll MON-VER, wait for the reply (5 s cap)
+2. **Apply**: user keys (source `START_ARG`/`RUNTIME_USER`) in one CFG-VALSET at a time, RAM layer,
+   ACK tracked (`config_engine_send_valset()`)
+3. **Verify**: CFG-VALGET (RAM) of the same keys; the reply is diverted to the engine
+   (`config_engine_consume_valget()`) and compared byte-for-byte; match -> `PARAM_VERIFIED`
+4. **Ladder on mismatch/NAK/timeout**: retries with backoff -> transaction form -> UBX-CFG-RST
+   hot start -> one attempt every 30 s (rung a/b/c/d, all logged)
+5. **Sweep**: `ublox_fetch_device_params_async()` fetches the `PARAM_INITIAL` keys only after
+   the user keys are verified
+6. **Watchdog** (READY): no UBX-NAV, or NMEA streaming with `CFG_USBOUTPROT_NMEA=false`, re-verifies
+
+The engine is pure logic driven by a 50 ms timer in the parameter callback group; other threads
+only post events under `config_engine_mutex_` (a leaf lock - never call out while holding it).
+`CONFIG_ENGINE_ENABLED=false` restores the legacy `ublox_send_user_params_async()` path.
+Unit tests: `test/test_config_engine.cpp`, `test/test_cfg_valget_parse.cpp`.
 
 #### USB Hot-Plug Architecture (ENHANCED)
 **USB Driver States:** `DISCONNECTED` → `CONNECTING` → `CONNECTED` → `ERROR` (4 states total)
@@ -111,14 +126,17 @@ PARAM_LOADED → PARAM_VALSET → PARAM_LOADED         (modify device value)
 **Enhanced Integration:** 
 - ParameterManager coordinates with DeviceReadinessState for parameter synchronization
 - Device readiness transitions to `READY` only after parameters are synchronized  
-- Reconnection optimization: Only user parameters restored (not full re-initialization)
-- Automatic parameter restoration via `restore_user_parameters_to_device()` on hotplug
+- Reconnection re-runs `perform_usb_initialization()` -> `config_engine_start()`: the engine
+  re-applies and re-verifies every user key (`restore_user_parameters_to_device()` is dead code)
+- `reset_device_parameters()` on detach keeps every user-sourced key (status back to `PARAM_USER`)
+  and invalidates device data only
 
 #### ROS2 Component Architecture
 Uses composition-based design with:
 - Separate callback groups for USB processing and parameter management
 - Mutex-protected thread-safe operations
-- Timer-based parameter synchronization (100ms cycle)
+- Timer-based parameter synchronization (1 s parameter timer + 50 ms config engine tick, same
+  callback group)
 
 ### UBX Protocol Implementation
 
@@ -233,7 +251,7 @@ void complex_function() {
 - All USB operations use libusb 1.0 API directly
 - Hot-plug detection and automatic reconnection
 - Transfer queues for async USB operations
-- Error handling with automatic retry mechanisms
+- Configuration writes are verified by readback and retried/escalated by the config engine
 
 ### Multi-Device Support
 - Support for multiple simultaneous u-blox devices

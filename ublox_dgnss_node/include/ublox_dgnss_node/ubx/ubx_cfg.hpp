@@ -91,7 +91,16 @@ public:
       idx += value_size;
 
       // create and append key value configuration data
+      /* TODO: Review - Original implementation commented out. `*bytes` is bytes[0], so the
+       * 8-byte value_t union was brace-initialised from ONE byte and every multi-byte
+       * value (U2/I2/U4/I4/...) came back truncated to its low byte (1000 -> 232).
       auto key_value = key_value_t {ubx_key_id, *bytes};
+      cfg_data.push_back(key_value);
+      */
+      // TODO(Review) - New implementation copies the full packed value
+      key_value_t key_value;
+      key_value.ubx_key_id = ubx_key_id;
+      memcpy(key_value.ubx_value.bytes, bytes, sizeof(key_value.ubx_value.bytes));
       cfg_data.push_back(key_value);
     }
   }

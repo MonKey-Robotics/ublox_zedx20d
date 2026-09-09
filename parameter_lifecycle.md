@@ -20,13 +20,27 @@ The UBlox DGNSS parameter system provides thread-safe parameter management with 
 #### Parameter Processing Timer
 - **Purpose**: Separate thread for parameter-device communication
 - **Callback Group**: `MutuallyExclusive` for thread isolation
-- **Interval**: 100ms processing cycle
-- **Function**: Processes parameter cache and handles device communication
+- **Interval**: 1 s processing cycle (`param_processing_timer_`), plus the 50 ms config
+  engine tick (`config_engine_timer_`) in the same callback group
+- **Function**: Collects `PARAM_USER` parameters with `needs_device_send` and hands them to
+  the config engine (`send_parameters_to_device_batch()` enqueues; the engine applies and
+  verifies them)
+
+#### Config Engine
+- **Purpose**: Apply every user key with one CFG-VALSET in flight, read it back with
+  CFG-VALGET (RAM layer) and escalate when the readback disagrees (see
+  `include/ublox_dgnss_node/config_engine.hpp`; pure logic, unit-tested)
+- **Why**: on a cold start the ZED-X20D acknowledged the startup CFG-VALSET without applying it
+- **Ladder**: retries with backoff -> transaction form -> UBX-CFG-RST hot start -> 30 s retries
+- **Watchdog**: re-verifies when UBX-NAV stops or NMEA streams with NMEA disabled
+- **Result**: `PARAM_VERIFIED` (source preserved); a key NAKed on its own becomes `PARAM_ACKNAK`
 
 #### USB State Management
 - **Driver States**: `DISCONNECTED`, `CONNECTING`, `CONNECTED`, `ERROR` (4 states total)
-- **Integration**: Direct parameter restoration on hotplug attach callback
-- **Hotplug Support**: Automatic parameter restoration via `restore_user_parameters_to_device()`
+- **Integration**: hotplug re-attach re-runs `perform_usb_initialization()`, which restarts the
+  config engine (`config_engine_start()`) with every user-sourced key
+- **Hotplug Support**: `reset_device_parameters()` keeps user-sourced keys and invalidates
+  device data; `restore_user_parameters_to_device()` is dead code
 
 ## Parameter State Machine
 
@@ -52,7 +66,8 @@ enum ParamStatus {
   PARAM_LOADED,     // Loaded from GPS device - not all items have a value set
   PARAM_VALSET,     // Value sent to GPS device - might get rejected there
   PARAM_VALGET,     // Attempt to retrieve value from GPS device
-  PARAM_ACKNAK      // Future version - poll for value or valset might not work
+  PARAM_ACKNAK,     // Device NAKed this key on its own (bad value) - dropped from the config
+  PARAM_VERIFIED    // User value sent AND read back from the device RAM layer (config engine)
 };
 ```
 
@@ -63,8 +78,9 @@ Complete state transition matrix with validation:
 ```
 PARAM_INITIAL → PARAM_VALGET → PARAM_LOADED        (device fetch)
 PARAM_LOADED → PARAM_VALGET → PARAM_LOADED         (hot plug re-fetch)
-PARAM_USER → PARAM_VALSET → PARAM_LOADED           (user override)
-PARAM_LOADED → PARAM_VALSET → PARAM_LOADED         (modify device value)
+PARAM_USER → PARAM_VALSET → PARAM_VERIFIED         (user override, readback matched)
+PARAM_USER → PARAM_ACKNAK                          (device NAKed the key on its own)
+PARAM_VERIFIED / PARAM_VALSET → PARAM_USER         (USB detach: re-applied on re-attach)
 ```
 
 **State Transition Validation**: The `update_parameter_cache()` method enforces these transitions and rejects invalid state changes.
@@ -350,8 +366,9 @@ void update_parameter_cache(const std::string & param_name,
 #### Device Connection
 1. USB hotplug detection triggers attach callback
 2. USB driver state transitions to `CONNECTED`
-3. ParameterManager receives state change notification
-4. Parameter restoration begins for `PARAM_USER` parameters
+3. `perform_usb_initialization()` -> `ublox_dgnss_init_async()` -> `config_engine_start()`
+4. The config engine polls MON-VER, applies and verifies every user-sourced key, then starts
+   the device parameter fetch (CFG-VALGET sweep of the `PARAM_INITIAL` keys)
 
 #### Device Disconnection
 1. USB hotplug detection triggers detach callback
@@ -359,43 +376,24 @@ void update_parameter_cache(const std::string & param_name,
 3. ParameterManager receives state change notification
 4. Parameter cache preserved for reconnection
 
-#### Simple Reconnection Detection
+#### Reconnection
 ```cpp
-// Actual hotplug_attach_callback implementation - ublox_dgnss_node.cpp:1368-1390
+// hotplug_attach_callback (ublox_dgnss_node.cpp): a re-attach re-runs the full USB
+// initialisation, which restarts the config engine; the first attach is handled by the
+// usb_init_timer_ path that called usbc_->init() in the first place.
 void hotplug_attach_callback() {
   device_attached_ = true;
-  bool is_reconnection = has_been_connected_before_;  // Simple reconnection flag
-  
-  if (is_reconnection) {
-    // Reconnection: Just restore user parameters
-    RCLCPP_INFO(get_logger(), "Device reconnected - restoring user parameters");
-    if (parameter_manager_) {
-      parameter_manager_->restore_user_parameters_to_device();
-      device_readiness_state_ = DeviceReadinessState::READY;
-    }
+  if (has_been_connected_before_) {
+    perform_usb_initialization();   // -> ublox_dgnss_init_async() -> config_engine_start()
   } else {
-    // Initial connection: Full initialization
-    perform_usb_initialization();  // Existing full init
-    device_readiness_state_ = DeviceReadinessState::READY;
     has_been_connected_before_ = true;
-    RCLCPP_INFO(get_logger(), "Initial device connection completed");
   }
 }
 
-// Parameter restoration implementation - parameters.cpp:200-215
-void restore_user_parameters_to_device() {
-  size_t user_params_restored = 0;
-  
-  for (auto& [param_name, p_state] : param_cache_map_) {
-    if (p_state.param_source == ParamValueSource::START_ARG ||
-        p_state.param_source == ParamValueSource::RUNTIME_USER) {
-      send_parameter_to_device(param_name, PARAM_VALSET);
-      user_params_restored++;
-    }
-  }
-  
-  RCLCPP_INFO(logger_, "Restored %zu user parameters to device", user_params_restored);
-}
+// config_engine_start(): every key whose value came from the user
+// (ParameterManager::get_user_parameters(): source START_ARG or RUNTIME_USER, not
+// PARAM_ACKNAK) is handed to the engine, which applies it, reads it back and marks it
+// PARAM_VERIFIED. restore_user_parameters_to_device() is no longer called.
 ```
 
 ### Runtime Parameter Changes
@@ -411,9 +409,10 @@ void restore_user_parameters_to_device() {
    - Device communication handled via `device_batch_callback_` on separate thread with `MutuallyExclusive` callback group
 
 3. **Device Communication**
-   - Parameters sent to device in batches using `send_batch_parameters()`
-   - State transition `PARAM_USER` → `PARAM_VALSET` via batch completion
-   - Exception handling with automatic retry for failed batch operations
+   - `send_batch_parameters()` -> `send_parameters_to_device_batch()` enqueues the keys into
+     the config engine (`enqueue_keys()`); state transition `PARAM_USER` → `PARAM_VALSET`
+   - The engine sends the CFG-VALSET, waits for the ACK, reads the keys back and marks them
+     `PARAM_VERIFIED`; a mismatch re-enters the retry ladder
 
 ## Thread Safety
 
@@ -451,7 +450,9 @@ void restore_user_parameters_to_device() {
 
 ### Error Handling
 - Device communication failures handled gracefully
-- Parameter operations retry on USB reconnection
+- Every user key is re-applied and re-verified by the config engine on USB reconnection
+- An ACKed-but-unapplied, NAKed or unanswered CFG-VALSET is retried and escalated by the
+  config engine (retries -> transaction -> UBX-CFG-RST -> 30 s retries)
 - State machine prevents inconsistent operations
 - System degrades gracefully without USB device
 
@@ -784,15 +785,15 @@ void ParameterManager::restore_user_parameters_to_device() {
    ↓
 3. Device opened and initialized
    ↓
-4. parameter_manager_->restore_user_parameters_to_device()
+4. perform_usb_initialization() -> ublox_dgnss_init_async() -> config_engine_start()
    ↓
-5. 20+ user parameters sent to device
+5. Config engine: MON-VER handshake, CFG-VALSET of the user keys, CFG-VALGET readback
    ↓
-6. Device parameter fetch initiated (CFG-VALGET)
+6. Readback matches -> PARAM_VERIFIED, "user configuration verified on device (N keys)"
    ↓
-7. 110+ device parameters requested from device
+7. Device parameter fetch initiated (CFG-VALGET sweep of the PARAM_INITIAL keys)
    ↓
-8. Full parameter synchronization restored
+8. Full parameter synchronization restored (READY)
 ```
 
 ### Enhanced CFG-VALGET Response Handling
@@ -830,17 +831,21 @@ void update_param_from_device(const std::string& param_name,
 
 The enhanced parameter management integrates seamlessly with the existing 3-phase initialization:
 
-**Phase 1: User Parameter Transmission**
+**Phase 1: User Parameter Transmission + Verification (config engine)**
 - Uses `ParamValueSource::START_ARG` and `ParamValueSource::RUNTIME_USER` for filtering
-- Enhanced source tracking ensures only user parameters sent
+- One CFG-VALSET in flight, ACK tracked, then a CFG-VALGET readback of the same keys; the
+  readback reply is consumed by the engine and never reaches `update_param_from_device()`
+- Match -> `PARAM_VERIFIED`; mismatch/NAK/timeout -> retry ladder
 
 **Phase 2: Parameter Declaration**  
-- Missing parameters declared with `PARAM_INITIAL` status
+- Missing parameters declared with `PARAM_INITIAL` status (constructor)
 - Source tracking initialized to `ParamValueSource::UNKNOWN`
 
 **Phase 3: Device Parameter Fetch**
+- Started by the engine only after Phase 1 verified
 - CFG-VALGET responses marked with `ParamValueSource::DEVICE_ACTUAL`  
-- State transitions to `PARAM_LOADED` preserve source information
+- State transitions to `PARAM_LOADED` preserve source information; user-owned keys
+  (`PARAM_USER/VALSET/VERIFIED/ACKNAK`) are skipped so a device value can never replace them
 
 ## Complete System Integration
 
@@ -950,8 +955,8 @@ public:
 
 **Failure Mode Handling**:
 1. **USB Communication Failure**: Parameter operations throw exceptions (fail-fast)
-2. **Device Parameter Fetch Failure**: Retry on next processing cycle
-3. **User Parameter Send Failure**: Logged but doesn't break hotplug flow
+2. **Device Parameter Fetch Failure**: 5 s timeout, degraded mode (missing keys logged)
+3. **User Parameter Send Failure**: the config engine retries and escalates (rung a-d)
 4. **Invalid State Transitions**: Builder validation prevents corruption
 
 ### Performance Optimization

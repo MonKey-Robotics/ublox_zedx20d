@@ -155,6 +155,11 @@ private:
   int no_device_streak_ = 0;
   static constexpr int kNoDeviceThreshold = 3;
 
+  // shutdown() is reached three times on exit (rclcpp on_shutdown hook, node destructor,
+  // ~Connection) from different threads; serialise it and run it once.
+  std::mutex shutdown_mutex_;
+  bool shutdown_done_ = false;
+
 private:
   libusb_device_handle * open_device_with_serial_string(
     libusb_context * ctx, int vendor_id,

@@ -64,7 +64,8 @@ enum ParamStatus
   PARAM_LOADED,     // Loaded from GPS device - not all items have a value set
   PARAM_VALSET,     // Value sent to GPS device - might get rejected there
   PARAM_VALGET,     // Attempt to retrieve value from GPS device
-  PARAM_ACKNAK      // Future version - poll for value or valset might not work
+  PARAM_ACKNAK,     // Device NAKed this key on its own (bad value) - dropped from the config
+  PARAM_VERIFIED    // User value sent AND read back from the device RAM layer (config engine)
 };
 
 inline const char * to_string(ParamStatus status)
@@ -76,6 +77,7 @@ inline const char * to_string(ParamStatus status)
     case PARAM_VALSET: return "PARAM_VALSET";
     case PARAM_VALGET: return "PARAM_VALGET";
     case PARAM_ACKNAK: return "PARAM_ACKNAK";
+    case PARAM_VERIFIED: return "PARAM_VERIFIED";
     default: return "INVALID_STATUS";
   }
 }
@@ -157,18 +159,21 @@ public:
         throw std::logic_error("Builder: value must be set for known ParamValueSource");
       }
 
-      // Validate that PARAM_USER and PARAM_VALSET have valid sources
-      if ((status_ == PARAM_USER || status_ == PARAM_VALSET) &&
+      // Validate that PARAM_USER, PARAM_VALSET and PARAM_VERIFIED have valid sources
+      if ((status_ == PARAM_USER || status_ == PARAM_VALSET || status_ == PARAM_VERIFIED) &&
         source_ == ParamValueSource::UNKNOWN)
       {
         throw std::logic_error(
-                "Builder: source must not be UNKNOWN for status PARAM_USER or PARAM_VALSET");
+                "Builder: source must not be UNKNOWN for status PARAM_USER, PARAM_VALSET "
+                "or PARAM_VERIFIED");
       }
 
-      // Validate that PARAM_USER and PARAM_VALSET have values
-      if ((status_ == PARAM_USER || status_ == PARAM_VALSET) && !value_.has_value()) {
+      // Validate that PARAM_USER, PARAM_VALSET and PARAM_VERIFIED have values
+      if ((status_ == PARAM_USER || status_ == PARAM_VALSET || status_ == PARAM_VERIFIED) &&
+        !value_.has_value())
+      {
         throw std::logic_error(
-                "Builder: value must be set for status PARAM_USER or PARAM_VALSET");
+                "Builder: value must be set for status PARAM_USER, PARAM_VALSET or PARAM_VERIFIED");
       }
 
       // Validate that PARAM_INITIAL and PARAM_VALSET have values
@@ -251,6 +256,14 @@ public:
   void process_parameter_cache();
   void restore_user_parameters_to_device();
   void reset_device_parameters();
+
+  // Config engine support: keys whose value came from the user (launch yaml / ros2 param
+  // set) and therefore must be applied to, and verified on, the device.
+  std::vector<std::string> get_user_parameters();
+  // Readback matched: status -> PARAM_VERIFIED, source preserved.
+  void mark_parameters_verified(const std::vector<std::string> & param_names);
+  // Device NAKed the key on its own: status -> PARAM_ACKNAK, never sent again.
+  void mark_parameters_acknak(const std::vector<std::string> & param_names);
 
   // UBX config item access (direct types)
   bool is_valid_parameter(const std::string & param_name);

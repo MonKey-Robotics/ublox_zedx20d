@@ -159,24 +159,18 @@ int hotplug_detach_callback(libusb_context* ctx, libusb_device* dev,
 ### Node-Level Integration
 
 ```cpp
-// High-level device state management - actual implementation
+// High-level device state management (ublox_dgnss_node.cpp)
 void hotplug_attach_callback() {
   device_attached_ = true;
-  bool is_reconnection = has_been_connected_before_;
-  
-  if (is_reconnection) {
-    // Reconnection: Just restore user parameters
-    RCLCPP_INFO(get_logger(), "Device reconnected - restoring user parameters");
-    if (parameter_manager_) {
-      parameter_manager_->restore_user_parameters_to_device();
-      device_readiness_state_ = DeviceReadinessState::READY;
-    }
+  if (has_been_connected_before_) {
+    // Re-attach: full USB init again -> ublox_dgnss_init_async() -> config_engine_start().
+    // The config engine re-applies and re-verifies every user-sourced key; READY is set by
+    // check_param_fetch_completion() once the device parameters are fetched.
+    perform_usb_initialization();
   } else {
-    // Initial connection: Full initialization
-    perform_usb_initialization();  // Existing full init
-    device_readiness_state_ = DeviceReadinessState::READY;
+    // First attach happened inside usbc_->init() called by the usb_init_timer_ path,
+    // which continues with init_async() and ublox_dgnss_init_async() itself.
     has_been_connected_before_ = true;
-    RCLCPP_INFO(get_logger(), "Initial device connection completed");
   }
 }
 
@@ -184,6 +178,9 @@ void hotplug_detach_callback() {
   RCLCPP_WARN(get_logger(), "USB device disconnected");
   device_attached_ = false;
   device_readiness_state_ = DeviceReadinessState::UNREADY;
+  config_engine_.on_detached(now);                  // engine idles; a CFG-RST-induced
+                                                    // re-enumeration keeps its counters
+  parameter_manager_->reset_device_parameters();    // user-sourced keys kept
 }
 ```
 
@@ -252,19 +249,15 @@ handle_usb_events_timer_ = create_wall_timer(
 
 ### Parameter System Integration
 ```cpp
-// Parameter restoration on device reconnection - actual implementation
-void restore_user_parameters_to_device() {
-  size_t user_params_restored = 0;
-  
-  for (auto& [param_name, p_state] : param_cache_map_) {
-    if (p_state.param_source == ParamValueSource::START_ARG ||
-        p_state.param_source == ParamValueSource::RUNTIME_USER) {
-      send_parameter_to_device(param_name, PARAM_VALSET);
-      user_params_restored++;
-    }
+// On every (re)connection the config engine is started with the user-sourced keys
+// (ParameterManager::get_user_parameters()) and applies, reads back and verifies them;
+// see parameter_lifecycle.md and include/ublox_dgnss_node/config_engine.hpp.
+void config_engine_start() {
+  cfgeng::StartInfo info;
+  for (const auto & name : parameter_manager_->get_user_parameters()) {
+    info.user_keys.push_back({key_id_of(name), name});
   }
-  
-  RCLCPP_INFO(logger_, "Restored %zu user parameters to device", user_params_restored);
+  config_engine_.start(info, now);   // -> POLL_MON_VER, SEND_VALSET, SEND_VALGET_VERIFY ...
 }
 ```
 
@@ -622,15 +615,16 @@ Node Layer (ublox_dgnss_node.cpp):
    ↓
 7. is_reconnection check (has_been_connected_before_)
    ↓
-8. parameter_manager_->restore_user_parameters_to_device()
+8. perform_usb_initialization(): init_async() submits a fresh USB IN transfer
    ↓
-9. 20+ user parameters sent to device (see parameter_lifecycle.md)
+9. ublox_dgnss_init_async() -> config_engine_start()
    ↓
-10. init_async() submits fresh USB IN transfer
+10. Config engine: MON-VER handshake, CFG-VALSET of the user keys, CFG-VALGET readback,
+    retry ladder on mismatch (see parameter_lifecycle.md)
    ↓
-11. CFG-VALGET requests 110+ device parameters
+11. "user configuration verified on device" -> CFG-VALGET sweep of the device parameters
    ↓
-12. device_readiness_state_ = READY
+12. check_param_fetch_completion(): device_readiness_state_ = READY
 ```
 
 ### System State Consistency

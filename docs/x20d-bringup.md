@@ -29,6 +29,12 @@ Steps 1-4 were completed on a simpleRTK4 Dual on 2026-09-04 (see
 - Only one process may own the device. A stale driver holding the USB interface makes a
   new one fail with `LIBUSB_ERROR_BUSY`; a driver that is started while the device is
   absent logs `Starting USB initialization` every 10 ms until it appears.
+- Cold start: after hours unpowered the receiver has been seen to ACK the startup
+  CFG-VALSET without applying it (default NMEA keeps streaming, no UBX NAV output). The
+  driver's config engine reads every user key back and escalates on its own (see
+  [x20d-port-notes.md](x20d-port-notes.md)); nothing needs to be unplugged. `CONFIG_ENGINE_*`
+  parameters (README) tune the ladder; `CONFIG_ENGINE_ENABLED:=false` restores the old
+  fire-and-forget behaviour if the engine itself misbehaves.
 
 ## Checklist
 
@@ -42,9 +48,19 @@ Steps 1-4 were completed on a simpleRTK4 Dual on 2026-09-04 (see
 2. **First connection** -
    `ros2 launch ublox_dgnss ublox_x20d_rover_heading.launch.py`
    - The node must log `Device family: X20D ...` and reach CONNECTED.
+   - A healthy start logs, within a few seconds: `receiver MON-VER: ... FWVER=HDG 2.00
+     PROTVER=57.02`, `user configuration verified on device (N keys)`, then
+     `Parameter fetch completed successfully`. NMEA shows up only as a throttled
+     `nmea: N sentences in 5.0 s, last: $GNTHS,...` line (one sentence/s is the normal
+     THS leak; dozens/s mean the configuration is not applied).
+   - `config NOT applied on device (rung a, attempt n/4): ...` followed by `rung b` /
+     `rung c` lines is the engine working through the cold-start condition; note which
+     rung ends it and record it in the port notes.
    - Sweep the startup log for `not recognised` warnings and `NAK` messages from the
      config sweep; every offender needs an `@exclude: X20D` in `ubx_cfg_item_map.hpp`
-     followed by `python3 ublox_dgnss/scripts/generate_toml_from_existing.py`.
+     followed by `python3 ublox_dgnss/scripts/generate_toml_from_existing.py`. A key the
+     receiver NAKs on its own is logged at ERROR and dropped (`PARAM_ACKNAK`), it never
+     escalates to a receiver reset.
    - `ros2 topic echo /ubx_nav_hp_pos_llh` proves position before touching heading.
 3. **Config keys live** -
    `ros2 param get /ublox_dgnss CFG_MSGOUT_UBX_NAV_DAHEADING_USB` (expect 1 from the
@@ -71,7 +87,15 @@ Steps 1-4 were completed on a simpleRTK4 Dual on 2026-09-04 (see
    and at each step confirm `rel_pos_heading_valid` stays 1 for a full minute (not just
    the first seconds) and `dmesg` shows no USB re-enumeration. On HDG 2.00 expect 1 Hz to
    be the usable rate.
-8. Record the results in [x20d-port-notes.md](x20d-port-notes.md).
+8. **Cold start** - leave the receiver unpowered overnight (>12 h), boot, and read the
+   driver log: which rung (`a` retries, `b` transaction, `c` CFG-RST) made
+   `user configuration verified on device` appear. If rung c with the default
+   controlled software reset does not clear it, launch with
+   `CONFIG_ENGINE_RESET_MODE:=0` (hardware reset) and repeat. Bench stand-in without
+   waiting: `ros2 service call /<ns>/ublox_dgnss/cold_start
+   ublox_ubx_interfaces/srv/ColdStart '{reset_type: 1}'` while the driver runs - the RAM
+   configuration is wiped and the engine must re-apply and re-verify it.
+9. Record the results in [x20d-port-notes.md](x20d-port-notes.md).
 
 ## robot_localization notes
 
@@ -86,3 +110,9 @@ Steps 1-4 were completed on a simpleRTK4 Dual on 2026-09-04 (see
 Feed it to the EKF as an `imu0`-style input with only the yaw element of the pose
 enabled. Nothing is ever published while the receiver marks the heading invalid, so a
 stale heading cannot reach the filter.
+
+Fuse an IMU angular velocity (`vyaw`) in the same filter. With only this 1 Hz absolute
+heading the filter's yaw-rate state is unobserved: after a turn it keeps the last inferred
+rate, the heading runs on between fixes and each fix only partly pulls the rate back, giving
+a ~5 s decaying sawtooth after every stop (seen on the rover at 30 deg/s). A 100 Hz gyro
+makes the rate observable and the heading settles within a filter cycle.

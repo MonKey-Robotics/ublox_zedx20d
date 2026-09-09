@@ -23,12 +23,14 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <set>
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "ublox_dgnss_node/visibility_control.h"
 #include "ublox_dgnss_node/usb.hpp"
 #include "ublox_dgnss_node/parameters.hpp"
+#include "ublox_dgnss_node/config_engine.hpp"
 #include "ublox_dgnss_node/device_family.hpp"
 #include "ublox_dgnss_node/ubx/ubx_config_loader.hpp"
 #include "ublox_dgnss_node/ubx/ubx_cfg.hpp"
@@ -160,6 +162,7 @@ public:
     check_for_ubx_config_file_param(parameters_client);
     check_for_device_serial_param(parameters_client);
     check_for_frame_id_param(parameters_client);
+    read_config_engine_params();
 
     // Initialize ParameterManager EARLY for parameter validation
     parameter_manager_ = std::make_shared<ParameterManager>(get_logger());
@@ -387,6 +390,13 @@ public:
     RCLCPP_DEBUG(get_logger(), "creating param_processing_timer_ ...");
     param_processing_timer_ = create_wall_timer(
       1s, std::bind(&UbloxDGNSSNode::handle_param_processing_callback, this),
+      callback_group_param_processing_timer_);
+
+    // Config apply/verify engine tick. Same (mutually exclusive) callback group as the
+    // parameter timer, so the two never run concurrently; the engine mutex is a leaf.
+    RCLCPP_DEBUG(get_logger(), "creating config_engine_timer_ ...");
+    config_engine_timer_ = create_wall_timer(
+      50ms, std::bind(&UbloxDGNSSNode::config_engine_timer_callback, this),
       callback_group_param_processing_timer_);
 
     rclcpp::SubscriptionOptions sub_options;
@@ -680,6 +690,15 @@ private:
   mutable bool usb_qzssl6_detached_logged_ = false;
   mutable bool usb_spartnkey_detached_logged_ = false;
   static constexpr auto PARAM_FETCH_TIMEOUT = std::chrono::seconds(5);
+
+  // ---- config apply/verify engine (config_engine.hpp) ----
+  // CONFIG_ENGINE_ENABLED=false restores the legacy fire-and-forget startup path.
+  bool config_engine_enabled_ = true;
+  cfgeng::ConfigEngine config_engine_;
+  std::mutex config_engine_mutex_;   // leaf lock: never call out of the node while held
+  rclcpp::TimerBase::SharedPtr config_engine_timer_;
+  std::shared_ptr<ubx::FrameValSet> last_valset_frame_;
+  bool mon_ver_logged_ = false;      // one INFO line per connection
 
   std::string frame_id_;
   const std::string FRAME_ID_PARAM_NAME = "FRAME_ID";
@@ -976,6 +995,20 @@ public:
       const auto * ubx_ci_ptr = parameter_manager_->find_config_item_by_key(kv.ubx_key_id);
       if (ubx_ci_ptr != nullptr) {
         auto ubx_ci = *ubx_ci_ptr;
+        // TODO(Review) - a user-owned key (launch yaml / ros2 param set) keeps its value:
+        // the device value would otherwise replace it as PARAM_LOADED/DEVICE_ACTUAL and the
+        // config engine could no longer re-apply it.
+        if (config_engine_enabled_) {
+          auto st = parameter_manager_->get_parameter_state(ubx_ci.ubx_config_item);
+          if (st && (st->param_status == PARAM_USER || st->param_status == PARAM_VALSET ||
+            st->param_status == PARAM_VERIFIED || st->param_status == PARAM_ACKNAK))
+          {
+            RCLCPP_DEBUG(
+              get_logger(), "%s is user-owned (%s); device value ignored",
+              ubx_ci.ubx_config_item, to_string(st->param_status));
+            continue;
+          }
+        }
         update_param_from_device(ubx_ci, kv.ubx_value);
       }
     }
@@ -1381,6 +1414,7 @@ public:
     ubx_cfg_->cfg_rst_set_nav_bbr_mask(ubx::cfg::NAV_BBR_HOT_START);
     ubx_cfg_->cfg_rst_set_reset_mode(request->reset_type);
     ubx_cfg_->cfg_rst_command_async();
+    config_engine_on_external_reset();
     (void)response;
   }
 
@@ -1395,6 +1429,7 @@ public:
     ubx_cfg_->cfg_rst_set_nav_bbr_mask(ubx::cfg::NAV_BBR_WARM_START);
     ubx_cfg_->cfg_rst_set_reset_mode(request->reset_type);
     ubx_cfg_->cfg_rst_command_async();
+    config_engine_on_external_reset();
     (void)response;
   }
 
@@ -1409,6 +1444,7 @@ public:
     ubx_cfg_->cfg_rst_set_nav_bbr_mask(ubx::cfg::NAV_BBR_COLD_START);
     ubx_cfg_->cfg_rst_set_reset_mode(request->reset_type);
     ubx_cfg_->cfg_rst_command_async();
+    config_engine_on_external_reset();
     (void)response;
   }
 
@@ -1632,7 +1668,13 @@ public:
             buf[i] = 0;
           }
         }
+        /* TODO: Review - Original per-transfer INFO line commented out: it flooded the
+         * log (12k lines per failed start). The config engine timer now logs a throttled
+         * summary ("nmea: N sentences in 5.0 s, last: ...").
         RCLCPP_INFO(get_logger(), "nmea: %s", buf);
+        */
+        RCLCPP_DEBUG(get_logger(), "nmea: %s", buf);
+        config_engine_on_nmea(buf, len);
       } else {
         // UBX starts with 0x65 0x62
         if (len > 2 && buf[0] == ubx::UBX_SYNC_CHAR_1 && buf[1] == ubx::UBX_SYNC_CHAR_2) {
@@ -1746,7 +1788,9 @@ public:
 
       perform_usb_initialization();  // Existing full init
 
-      device_readiness_state_ = DeviceReadinessState::READY;
+      // TODO(Review) - READY is set by check_param_fetch_completion() once the
+      // configuration is verified and the device parameters are fetched, not here.
+      // device_readiness_state_ = DeviceReadinessState::READY;
       RCLCPP_INFO(get_logger(), "Hotplug device re-connection completed");
     } else {
       // Initial connection: Full initialization
@@ -1762,6 +1806,11 @@ public:
     RCLCPP_WARN(get_logger(), "USB device disconnected");
     device_attached_ = false;
     device_readiness_state_ = DeviceReadinessState::UNREADY;
+    mon_ver_logged_ = false;
+    {
+      std::lock_guard<std::mutex> lock(config_engine_mutex_);
+      config_engine_.on_detached(std::chrono::steady_clock::now());
+    }
 
     // Invalidate stale device parameters
     if (parameter_manager_) {
@@ -1790,6 +1839,37 @@ public:
     if (!parameter_manager_) {
       RCLCPP_ERROR(get_logger(), "parameter_manager_ is null - cannot send parameters to device");
       throw std::runtime_error("parameter_manager_ is null - cannot send parameters to device");
+    }
+
+    // TODO(Review) - config engine path: the keys are queued for an ACK-tracked CFG-VALSET
+    // followed by a CFG-VALGET readback, instead of the fire-and-forget send below (kept
+    // for CONFIG_ENGINE_ENABLED=false).
+    if (config_engine_enabled_) {
+      std::vector<cfgeng::KeyInfo> keys;
+      std::string item_list;
+      for (const std::string & param_name : param_names) {
+        const ubx::cfg::ubx_cfg_item_t * cfg_item =
+          parameter_manager_->find_config_item(param_name);
+        if (!cfg_item) {
+          RCLCPP_WARN(get_logger(), "Parameter %s not found in config items", param_name.c_str());
+          continue;
+        }
+        keys.push_back(cfgeng::KeyInfo{cfg_item->ubx_key_id.all, param_name});
+        item_list += param_name;
+        item_list += " ";
+      }
+      if (keys.empty()) {
+        RCLCPP_WARN(get_logger(), "No parameters were queued for the config engine");
+        return false;
+      }
+      {
+        std::lock_guard<std::mutex> lock(config_engine_mutex_);
+        config_engine_.enqueue_keys(keys);
+      }
+      RCLCPP_INFO(
+        get_logger(), "Queued %zu parameter(s) for CFG-VALSET apply + readback: %s",
+        keys.size(), item_list.c_str());
+      return true;
     }
 
     try {
@@ -2504,6 +2584,7 @@ private:
           get_logger(), "ubx class: 0x%02x id: 0x%02x ack ack payload - %s",
           f->ubx_frame->msg_class, f->ubx_frame->msg_id,
           payload_ack_ack->to_string().c_str());
+        config_engine_on_ack(true, payload_ack_ack->msg_class, payload_ack_ack->msg_id);
         break;
       case ubx::UBX_ACK_NAK:
         payload_ack_nak = std::make_shared<ubx::ack::AckNakPayload>(
@@ -2513,6 +2594,8 @@ private:
           get_logger(), "ubx class: 0x%02x id: 0x%02x ack nak payload - %s",
           f->ubx_frame->msg_class, f->ubx_frame->msg_id,
           payload_ack_nak->to_string().c_str());
+        // TODO(Review) - retry/escalation now lives in the config engine (config_engine.hpp)
+        config_engine_on_ack(false, payload_ack_nak->msg_class, payload_ack_nak->msg_id);
         // TODO(someday) investigate how to get a message about why it returned a nak
         // switch (payload_ack_nak->msg_id) {
         //   case ubx::UBX_CFG_VALSET:
@@ -2546,7 +2629,16 @@ private:
           get_logger(), "ubx class: 0x%02x id: 0x%02x cfg polled payload - %s",
           f->ubx_frame->msg_class, f->ubx_frame->msg_id,
           ubx_cfg_->cfg_val_get_payload()->to_string().c_str());
-        ubx_cfg_payload_parameters(ubx_cfg_->cfg_val_get_payload());
+        {
+          // TODO(Review) - a verification readback is answered by the config engine and
+          // must not reach the generic path (it would overwrite the user value with the
+          // device value); anything else (the startup sweep) goes through as before.
+          auto cfg_val_get_payload = ubx_cfg_->cfg_val_get_payload();
+          if (config_engine_consume_valget(cfg_val_get_payload)) {
+            break;
+          }
+          ubx_cfg_payload_parameters(cfg_val_get_payload);
+        }
         break;
       default:
         RCLCPP_WARN(
@@ -2599,6 +2691,8 @@ private:
       // Declare the parameter with the aggregated string
       declare_parameter("version_extension", version_extensions);
     }
+
+    config_engine_on_mon_ver(sw_version, hw_version, payload->extension);
   }
 
   UBLOX_DGNSS_NODE_LOCAL
@@ -2714,6 +2808,7 @@ private:
   UBLOX_DGNSS_NODE_LOCAL
   void ubx_nav_in_frame(ubx_queue_frame_t * f)
   {
+    config_engine_on_nav_frame();
     ubx_nav_->frame(f->ubx_frame);
     switch (f->ubx_frame->msg_id) {
       case ubx::UBX_NAV_CLOCK:
@@ -4378,12 +4473,446 @@ private:
     RCLCPP_DEBUG(get_logger(), "finished ublox_val_set_all_cfg_items_async");
   }
 
+  // ======================= config apply/verify engine adapters =======================
+  // The engine (config_engine.hpp) is pure logic. These adapters feed it events from the
+  // ubx/libusb threads and execute the actions its 50 ms tick returns. Rule: never call
+  // out of the node (USB, ParameterManager, set_parameter) while config_engine_mutex_ is
+  // held, so it stays a leaf lock.
+
+  UBLOX_DGNSS_NODE_LOCAL
+  rclcpp::ParameterValue config_engine_param_value(
+    const std::string & name, const rclcpp::ParameterValue & default_value)
+  {
+    // automatically_declare_parameters_from_overrides(true) may already have declared it
+    if (has_parameter(name)) {
+      return get_parameter(name).get_parameter_value();
+    }
+    return declare_parameter(name, default_value);
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  double config_engine_param_double(const std::string & name, double default_value)
+  {
+    auto v = config_engine_param_value(name, rclcpp::ParameterValue(default_value));
+    if (v.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
+      return static_cast<double>(v.get<int64_t>());
+    }
+    return v.get<double>();
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  int64_t config_engine_param_int(const std::string & name, int64_t default_value)
+  {
+    auto v = config_engine_param_value(name, rclcpp::ParameterValue(default_value));
+    if (v.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+      return static_cast<int64_t>(v.get<double>());
+    }
+    return v.get<int64_t>();
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  bool config_engine_param_bool(const std::string & name, bool default_value)
+  {
+    auto v = config_engine_param_value(name, rclcpp::ParameterValue(default_value));
+    return v.get<bool>();
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void read_config_engine_params()
+  {
+    cfgeng::Params p;
+    config_engine_enabled_ = config_engine_param_bool("CONFIG_ENGINE_ENABLED", true);
+    p.handshake_timeout_s =
+      config_engine_param_double("CONFIG_ENGINE_HANDSHAKE_TIMEOUT_S", p.handshake_timeout_s);
+    p.handshake_repoll_s =
+      config_engine_param_double("CONFIG_ENGINE_HANDSHAKE_REPOLL_S", p.handshake_repoll_s);
+    p.ack_timeout_s = config_engine_param_double("CONFIG_ENGINE_ACK_TIMEOUT_S", p.ack_timeout_s);
+    p.verify_timeout_s =
+      config_engine_param_double("CONFIG_ENGINE_VERIFY_TIMEOUT_S", p.verify_timeout_s);
+    p.valset_attempts = static_cast<int>(
+      config_engine_param_int("CONFIG_ENGINE_VALSET_ATTEMPTS", p.valset_attempts));
+    p.valset_backoff_s =
+      config_engine_param_double("CONFIG_ENGINE_VALSET_BACKOFF_S", p.valset_backoff_s);
+    p.txn_attempts = static_cast<int>(
+      config_engine_param_int("CONFIG_ENGINE_TXN_ATTEMPTS", p.txn_attempts));
+    p.reset_attempts = static_cast<int>(
+      config_engine_param_int("CONFIG_ENGINE_RESET_ATTEMPTS", p.reset_attempts));
+    p.reset_mode = static_cast<uint8_t>(
+      config_engine_param_int("CONFIG_ENGINE_RESET_MODE", p.reset_mode));
+    p.reset_settle_s =
+      config_engine_param_double("CONFIG_ENGINE_RESET_SETTLE_S", p.reset_settle_s);
+    p.degraded_retry_s =
+      config_engine_param_double("CONFIG_ENGINE_DEGRADED_RETRY_S", p.degraded_retry_s);
+    p.watchdog_enabled =
+      config_engine_param_bool("CONFIG_ENGINE_WATCHDOG_ENABLED", p.watchdog_enabled);
+    p.nav_watchdog_s = config_engine_param_double("CONFIG_ENGINE_NAV_WATCHDOG_S", p.nav_watchdog_s);
+    p.nmea_watchdog_per_s =
+      config_engine_param_double("CONFIG_ENGINE_NMEA_WATCHDOG_PER_S", p.nmea_watchdog_per_s);
+    p.watchdog_min_interval_s = config_engine_param_double(
+      "CONFIG_ENGINE_WATCHDOG_MIN_INTERVAL_S", p.watchdog_min_interval_s);
+    p.nmea_summary_period_s =
+      config_engine_param_double("NMEA_SUMMARY_PERIOD_S", p.nmea_summary_period_s);
+    config_engine_.set_params(p);
+    RCLCPP_INFO(
+      get_logger(),
+      "config engine %s: valset attempts %d, txn attempts %d, resets %d (mode 0x%02x), "
+      "watchdog %s",
+      config_engine_enabled_ ? "enabled" : "DISABLED (legacy fire-and-forget config)",
+      p.valset_attempts, p.txn_attempts, p.reset_attempts, p.reset_mode,
+      p.watchdog_enabled ? "on" : "off");
+  }
+
+  // USB initialised (first connection or hotplug re-attach): hand the user keys to the engine
+  UBLOX_DGNSS_NODE_LOCAL
+  void config_engine_start()
+  {
+    cfgeng::StartInfo info;
+    double rate_meas_s = 1.0;
+    int64_t rate_nav = 1;
+    std::string item_list;
+    for (const auto & name : parameter_manager_->get_user_parameters()) {
+      const auto * ci = parameter_manager_->find_config_item(name);
+      auto st = parameter_manager_->get_parameter_state(name);
+      if (!ci || !st || !st->param_value.has_value()) {
+        continue;
+      }
+      info.user_keys.push_back(cfgeng::KeyInfo{ci->ubx_key_id.all, name});
+      item_list += name;
+      item_list += " ";
+      rclcpp::Parameter p(name, st->param_value.value());
+      try {
+        if (name.rfind("CFG_MSGOUT_UBX_NAV_", 0) == 0 && name.size() > 4 &&
+          name.compare(name.size() - 4, 4, "_USB") == 0)
+        {
+          if (p.as_int() > 0) {
+            info.nav_msgout_enabled = true;
+          }
+        } else if (name == "CFG_USBOUTPROT_NMEA") {
+          info.nmea_disabled = !p.as_bool();
+        } else if (name == "CFG_RATE_MEAS") {
+          rate_meas_s = static_cast<double>(p.as_int()) / 1000.0;
+        } else if (name == "CFG_RATE_NAV") {
+          rate_nav = p.as_int();
+        }
+      } catch (const rclcpp::ParameterTypeException & e) {
+        RCLCPP_WARN(
+          get_logger(), "config engine: %s has an unexpected type: %s", name.c_str(), e.what());
+      }
+    }
+    info.nav_period_s =
+      std::max(0.05, rate_meas_s * static_cast<double>(std::max<int64_t>(rate_nav, 1)));
+    RCLCPP_INFO(
+      get_logger(), "config engine: applying %zu user key(s) with readback verification: %s",
+      info.user_keys.size(), item_list.c_str());
+    std::lock_guard<std::mutex> lock(config_engine_mutex_);
+    config_engine_.start(info, std::chrono::steady_clock::now());
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void config_engine_timer_callback()
+  {
+    if (!keep_running_) {
+      config_engine_timer_->cancel();
+      return;
+    }
+    if (!usbc_ || usbc_->driver_state() != usb::USBDriverState::CONNECTED) {
+      return;  // nothing can be sent; the engine restarts from config_engine_start()
+    }
+    std::vector<cfgeng::Action> actions;
+    {
+      std::lock_guard<std::mutex> lock(config_engine_mutex_);
+      actions = config_engine_.tick(std::chrono::steady_clock::now());
+    }
+    for (const auto & a : actions) {
+      config_engine_execute(a);
+    }
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void config_engine_execute(const cfgeng::Action & a)
+  {
+    using cfgeng::ActionType;
+    try {
+      switch (a.type) {
+        case ActionType::LOG:
+          config_engine_log(a);
+          break;
+        case ActionType::POLL_MON_VER:
+          RCLCPP_DEBUG(get_logger(), "config engine: ubx_mon_ver poll_async ...");
+          ubx_mon_->ver()->poll_async();
+          break;
+        case ActionType::SEND_VALSET:
+          config_engine_send_valset(a.keys, a.txn_action);
+          break;
+        case ActionType::SEND_VALGET_VERIFY:
+          config_engine_send_valget_verify(a.keys);
+          break;
+        case ActionType::START_SWEEP:
+          RCLCPP_INFO(get_logger(), "Fetching configuration parameter values from device");
+          ublox_fetch_device_params_async();
+          break;
+        case ActionType::SEND_CFG_RST:
+          config_engine_send_reset();
+          break;
+        case ActionType::MARK_KEYS_VERIFIED:
+          parameter_manager_->mark_parameters_verified(config_engine_names(a.keys));
+          break;
+        case ActionType::MARK_KEYS_ACKNAK:
+          parameter_manager_->mark_parameters_acknak(config_engine_names(a.keys));
+          break;
+        default:
+          break;
+      }
+    } catch (const usb::UsbException & e) {
+      config_engine_action_failed(e.what());
+    } catch (const std::exception & e) {
+      config_engine_action_failed(e.what());
+    } catch (const std::string & msg) {
+      config_engine_action_failed(msg);
+    } catch (const char * msg) {
+      config_engine_action_failed(msg);
+    }
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void config_engine_action_failed(const std::string & what)
+  {
+    RCLCPP_ERROR(get_logger(), "config engine action failed: %s", what.c_str());
+    std::lock_guard<std::mutex> lock(config_engine_mutex_);
+    config_engine_.on_send_failed(what, std::chrono::steady_clock::now());
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void config_engine_log(const cfgeng::Action & a)
+  {
+    switch (a.level) {
+      case cfgeng::LogLevel::DEBUG:
+        RCLCPP_DEBUG(get_logger(), "%s", a.text.c_str());
+        break;
+      case cfgeng::LogLevel::INFO:
+        RCLCPP_INFO(get_logger(), "%s", a.text.c_str());
+        break;
+      case cfgeng::LogLevel::WARN:
+        RCLCPP_WARN(get_logger(), "%s", a.text.c_str());
+        break;
+      default:
+        RCLCPP_ERROR(get_logger(), "%s", a.text.c_str());
+        break;
+    }
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  std::vector<std::string> config_engine_names(const std::vector<cfgeng::KeyId> & keys)
+  {
+    std::vector<std::string> names;
+    for (auto k : keys) {
+      ubx::cfg::ubx_key_id_t id;
+      id.all = k;
+      const auto * ci = parameter_manager_->find_config_item_by_key(id);
+      if (ci) {
+        names.push_back(ci->ubx_config_item);
+      }
+    }
+    return names;
+  }
+
+  // Build and write one CFG-VALSET (RAM layer) for the given keys; the exact wire bytes go
+  // back to the engine as the expected readback values.
+  UBLOX_DGNSS_NODE_LOCAL
+  void config_engine_send_valset(const std::vector<cfgeng::KeyId> & keys, uint8_t txn_action)
+  {
+    std::vector<cfgeng::KeyBytes> expected;
+    std::string item_list;
+    {
+      std::lock_guard<std::mutex> lock(cfg_batch_mutex_);
+      ubx_cfg_->cfg_val_set_cfgdata_clear();
+      ubx_cfg_->cfg_val_set_layer_ram(true);
+      ubx_cfg_->cfg_val_set_transaction(txn_action);
+      for (auto k : keys) {
+        ubx::cfg::ubx_key_id_t id;
+        id.all = k;
+        const auto * ci = parameter_manager_->find_config_item_by_key(id);
+        if (!ci) {
+          RCLCPP_WARN(
+            get_logger(), "config engine: key %s not in the config map", id.to_hex().c_str());
+          continue;
+        }
+        auto st = parameter_manager_->get_parameter_state(ci->ubx_config_item);
+        if (!st || !st->param_value.has_value()) {
+          RCLCPP_WARN(get_logger(), "config engine: %s has no value", ci->ubx_config_item);
+          continue;
+        }
+        // same encoder as the legacy path (handles every UBX type)
+        auto result = cfg_val_set_from_ubx_ci_p_state(*ci, st.value());
+        if (!result.successful) {
+          RCLCPP_ERROR(
+            get_logger(), "config engine: %s not encodable: %s", ci->ubx_config_item,
+            result.reason.c_str());
+          continue;
+        }
+        item_list += ci->ubx_config_item;
+        item_list += " ";
+      }
+      if (ubx_cfg_->cfg_val_set_cfgdata_size() == 0) {
+        ubx_cfg_->cfg_val_set_transaction(0);
+        throw std::runtime_error("no sendable keys in CFG-VALSET");
+      }
+      for (auto kv : ubx_cfg_->cfg_val_set_payload_poll()->cfg_data) {
+        std::vector<ubx::u1_t> wire;
+        ubx::cfg::buf_append_keyvalue(&wire, &kv);   // 4 key bytes + packed value
+        expected.push_back(
+          cfgeng::KeyBytes{kv.ubx_key_id.all, std::vector<uint8_t>(wire.begin() + 4, wire.end())});
+      }
+      ubx_cfg_->cfg_val_set_poll_async();
+      last_valset_frame_ = ubx_cfg_->cfg_val_set_frame();
+      ubx_cfg_->cfg_val_set_cfgdata_clear();
+      ubx_cfg_->cfg_val_set_transaction(0);   // leave the shared builder transactionless
+    }
+    RCLCPP_DEBUG(
+      get_logger(), "config engine: CFG-VALSET txn=%u sent for %s", txn_action, item_list.c_str());
+    std::lock_guard<std::mutex> lock(config_engine_mutex_);
+    config_engine_.on_valset_sent(expected, std::chrono::steady_clock::now());
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void config_engine_send_valget_verify(const std::vector<cfgeng::KeyId> & keys)
+  {
+    std::lock_guard<std::mutex> lock(cfg_batch_mutex_);
+    ubx_cfg_->cfg_val_get_keys_clear();
+    ubx_cfg_->cfg_set_val_get_layer_ram();
+    for (auto k : keys) {
+      ubx::cfg::ubx_key_id_t id;
+      id.all = k;
+      ubx_cfg_->cfg_val_get_key_append(id);
+    }
+    RCLCPP_DEBUG(
+      get_logger(), "config engine: CFG-VALGET (RAM) readback for %zu key(s)", keys.size());
+    ubx_cfg_->cfg_val_get_poll_async();
+    ubx_cfg_->cfg_val_get_keys_clear();
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void config_engine_send_reset()
+  {
+    const uint8_t mode = config_engine_.params().reset_mode;
+    RCLCPP_WARN(
+      get_logger(),
+      "config engine: sending UBX-CFG-RST navBbrMask=0x0000 (hot start) resetMode=0x%02x", mode);
+    ubx_cfg_->cfg_rst_set_nav_bbr_mask(ubx::cfg::NAV_BBR_HOT_START);
+    ubx_cfg_->cfg_rst_set_reset_mode(mode);
+    ubx_cfg_->cfg_rst_command_async();
+  }
+
+  // ubx thread: CFG-VALGET reply. Returns true when it answered the engine's readback.
+  UBLOX_DGNSS_NODE_LOCAL
+  bool config_engine_consume_valget(std::shared_ptr<ubx::cfg::CfgValGetPayload> payload)
+  {
+    if (!config_engine_enabled_ || payload->layer != ubx::cfg::layer_t::RAM_LAYER) {
+      return false;
+    }
+    std::vector<cfgeng::KeyBytes> pairs;
+    for (auto kv : payload->cfg_data) {
+      const size_t n = kv.ubx_key_id.storage_size();
+      pairs.push_back(
+        cfgeng::KeyBytes{kv.ubx_key_id.all,
+          std::vector<uint8_t>(kv.ubx_value.bytes, kv.ubx_value.bytes + n)});
+    }
+    std::lock_guard<std::mutex> lock(config_engine_mutex_);
+    return config_engine_.on_valget_response(pairs, std::chrono::steady_clock::now());
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void config_engine_on_ack(bool ack, uint8_t msg_class, uint8_t msg_id)
+  {
+    if (!config_engine_enabled_) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(config_engine_mutex_);
+    if (ack) {
+      config_engine_.on_ack(msg_class, msg_id, std::chrono::steady_clock::now());
+    } else {
+      config_engine_.on_nak(msg_class, msg_id, std::chrono::steady_clock::now());
+    }
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void config_engine_on_mon_ver(
+    const std::string & sw_version, const std::string & hw_version,
+    const std::vector<std::string> & extensions)
+  {
+    if (!mon_ver_logged_) {
+      std::string tags;
+      for (const auto & e : extensions) {
+        if (e.rfind("FWVER=", 0) == 0 || e.rfind("PROTVER=", 0) == 0 || e.rfind("MOD=", 0) == 0) {
+          if (!tags.empty()) {
+            tags += " ";
+          }
+          tags += e;
+        }
+      }
+      RCLCPP_INFO(
+        get_logger(), "receiver MON-VER: sw='%s' hw='%s' %s", sw_version.c_str(),
+        hw_version.c_str(), tags.c_str());
+      mon_ver_logged_ = true;
+    }
+    if (!config_engine_enabled_) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(config_engine_mutex_);
+    config_engine_.on_mon_ver(std::chrono::steady_clock::now());
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void config_engine_on_nav_frame()
+  {
+    if (!config_engine_enabled_) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(config_engine_mutex_);
+    config_engine_.on_nav_frame(std::chrono::steady_clock::now());
+  }
+
+  // libusb thread: one bulk IN transfer holding one or more NMEA sentences
+  UBLOX_DGNSS_NODE_LOCAL
+  void config_engine_on_nmea(const unsigned char * buf, size_t len)
+  {
+    size_t sentences = 0;
+    std::string last;
+    for (size_t i = 0; i < len; i++) {
+      if (buf[i] == '$') {
+        sentences++;
+      }
+    }
+    for (size_t i = 0; i < len && i < 120; i++) {
+      const char c = static_cast<char>(buf[i]);
+      if (c == '\r' || c == '\n' || c == 0) {
+        break;
+      }
+      last.push_back(c);
+    }
+    std::lock_guard<std::mutex> lock(config_engine_mutex_);
+    config_engine_.on_nmea(sentences, last, std::chrono::steady_clock::now());
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void config_engine_on_external_reset()
+  {
+    if (!config_engine_enabled_) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(config_engine_mutex_);
+    config_engine_.on_external_reset(std::chrono::steady_clock::now());
+  }
+
   UBLOX_DGNSS_NODE_LOCAL
   void ublox_dgnss_init_async()
   {
     RCLCPP_INFO(get_logger(), "ublox_dgnss_init_async start");
-    RCLCPP_DEBUG(get_logger(), "ubx_mon_ver poll_async ...");
-    ubx_mon_->ver()->poll_async();
+    if (!config_engine_enabled_) {
+      // the config engine polls MON-VER itself as its readiness handshake
+      RCLCPP_DEBUG(get_logger(), "ubx_mon_ver poll_async ...");
+      ubx_mon_->ver()->poll_async();
+    }
     RCLCPP_DEBUG(get_logger(), "ubx_sec_uniqid poll_async ...");
     ubx_sec_->uniqid()->poll_async();
 
@@ -4405,9 +4934,16 @@ private:
     // // ubx_cfg_->cfg_val_set_key_append(ubx::cfg::CFG_USBOUTPROT_NMEA, true);
     // ubx_cfg_->cfg_val_set_poll_async();
 
-    // Original ublox_init_all_cfg_items_async() filters for PARAM_USER only
-    RCLCPP_DEBUG(get_logger(), "ublox_init_all_cfg_items_async() ...");
-    ublox_init_all_cfg_items_async();
+    if (config_engine_enabled_) {
+      // TODO(Review) - config engine: MON-VER handshake, one CFG-VALSET in flight, readback
+      // verification, retry ladder, then the device-parameter sweep. The legacy
+      // fire-and-forget path below is kept for CONFIG_ENGINE_ENABLED=false.
+      config_engine_start();
+    } else {
+      // Original ublox_init_all_cfg_items_async() filters for PARAM_USER only
+      RCLCPP_DEBUG(get_logger(), "ublox_init_all_cfg_items_async() ...");
+      ublox_init_all_cfg_items_async();
+    }
 
     // RCLCPP_DEBUG(get_logger(), "ublox_val_get_all_cfg_items_async() ...");
     // ublox_val_get_all_cfg_items_async();

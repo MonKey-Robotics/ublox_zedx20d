@@ -988,6 +988,14 @@ void Connection::close_devh()
 
 void Connection::shutdown()
 {
+  // TODO(Review) - idempotent + serialised: the rclcpp on_shutdown hook (signal thread) and
+  // the node destructor (main thread) both called this, so libusb_close() ran twice on the
+  // same handle and the process aborted with heap corruption on every exit (core dumps).
+  std::lock_guard<std::mutex> lock(shutdown_mutex_);
+  if (shutdown_done_) {
+    return;
+  }
+  shutdown_done_ = true;
   keep_running_ = false;
 
   // de register hotplug callbacks

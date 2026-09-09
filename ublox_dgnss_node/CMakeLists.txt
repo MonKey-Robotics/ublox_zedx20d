@@ -86,6 +86,20 @@ if(BUILD_TESTING)
   # uncomment the line when this package is not in a git repo
   #set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+  # Config apply/verify engine: pure logic, no ROS or USB needed.
+  ament_add_gtest(test_config_engine test/test_config_engine.cpp)
+  target_include_directories(test_config_engine PRIVATE include)
+  # CFG-VALGET payload parser (multi-byte values). ubx.hpp pulls in the USB layer, so the
+  # USB sources are compiled into the test; linking the component library instead would
+  # define the header globals (ubxKeyCfgItemMap) twice and double-free them at exit.
+  ament_add_gtest(test_cfg_valget_parse
+    test/test_cfg_valget_parse.cpp
+    src/usb.cpp
+    src/device_family.cpp)
+  target_include_directories(test_cfg_valget_parse PRIVATE include ${libusb_INCLUDE_DIRS})
+  target_link_libraries(test_cfg_valget_parse usb-1.0)
 endif()
 
 ament_package()

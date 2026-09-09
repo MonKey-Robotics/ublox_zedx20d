@@ -73,6 +73,11 @@ in the new `UBX-NAV-DAHEADING` (0x01 0x45) message on `/ubx_nav_da_heading`. Key
 - The `ublox_heading_imu_node` package converts `/ubx_nav_da_heading` into a
   `sensor_msgs/Imu` yaw-only orientation on `heading/imu` for `robot_localization`,
   gated on the receiver's validity flags and carrier solution status.
+- **Configuration is verified, not assumed.** After a cold start the HDG firmware has been
+  seen to acknowledge a CFG-VALSET without applying it. The driver's config engine reads
+  every user key back from the RAM layer and escalates (retries, transaction form,
+  UBX-CFG-RST hot start) until the readback matches; see the `CONFIG_ENGINE_*` parameters
+  below and [docs/x20d-port-notes.md](docs/x20d-port-notes.md).
 
 ```zsh
 ros2 launch ublox_dgnss ublox_x20d_rover_heading.launch.py
@@ -133,6 +138,35 @@ or the current value retrieved
 ``` zsh
 ros2 param get /ublox_dgnss CFG_RATE_NAV
 ```
+
+### Config engine parameters
+
+Every `CFG_*` value supplied at launch or via `ros2 param set` is written with one
+CFG-VALSET in flight at a time, read back with CFG-VALGET (RAM layer) and only then reported
+as applied (`user configuration verified on device (N keys)` in the log). A readback that
+disagrees walks a ladder - retries with backoff, the same keys as a configuration transaction,
+UBX-CFG-RST (hot start) and re-apply, then one attempt every 30 s forever - each rung logged
+at WARN/ERROR. A runtime watchdog re-verifies when no UBX-NAV message arrives or NMEA keeps
+streaming although `CFG_USBOUTPROT_NMEA` is false. Per-sentence NMEA logging moved to DEBUG;
+INFO gets a throttled `nmea: N sentences in 5.0 s, last: ...` summary.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `CONFIG_ENGINE_ENABLED` | `true` | `false` restores the legacy fire-and-forget startup |
+| `CONFIG_ENGINE_HANDSHAKE_TIMEOUT_S` | `5.0` | MON-VER wait before configuring anyway (re-poll `CONFIG_ENGINE_HANDSHAKE_REPOLL_S`, 1.0) |
+| `CONFIG_ENGINE_ACK_TIMEOUT_S` | `1.5` | CFG-VALSET ACK wait |
+| `CONFIG_ENGINE_VERIFY_TIMEOUT_S` | `1.5` | readback CFG-VALGET wait |
+| `CONFIG_ENGINE_VALSET_ATTEMPTS` | `4` | rung a attempts, backoff `CONFIG_ENGINE_VALSET_BACKOFF_S` (0.5) doubling |
+| `CONFIG_ENGINE_TXN_ATTEMPTS` | `2` | rung b (transaction form) attempts, 0 disables |
+| `CONFIG_ENGINE_RESET_ATTEMPTS` | `3` | rung c UBX-CFG-RST resets, 0 disables |
+| `CONFIG_ENGINE_RESET_MODE` | `1` | CFG-RST `resetMode`: 0x01 controlled software reset, 0x00 hardware reset |
+| `CONFIG_ENGINE_RESET_SETTLE_S` | `3.0` | wait for USB re-enumeration after CFG-RST before re-handshaking |
+| `CONFIG_ENGINE_DEGRADED_RETRY_S` | `30.0` | rung d cadence |
+| `CONFIG_ENGINE_WATCHDOG_ENABLED` | `true` | runtime re-verification |
+| `CONFIG_ENGINE_NAV_WATCHDOG_S` | `5.0` | no UBX-NAV for this long (at least 3 nav periods) trips the watchdog |
+| `CONFIG_ENGINE_NMEA_WATCHDOG_PER_S` | `3.0` | NMEA rate tolerated with NMEA disabled (`$GNTHS` leaks at 1/s; the unapplied default set is ~46/s) |
+| `CONFIG_ENGINE_WATCHDOG_MIN_INTERVAL_S` | `30.0` | minimum gap between watchdog trips |
+| `NMEA_SUMMARY_PERIOD_S` | `5.0` | INFO NMEA summary period |
 
 ### UBX Parameters
 

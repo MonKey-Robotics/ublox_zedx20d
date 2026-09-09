@@ -64,11 +64,59 @@ else with a throttled warning.
   west. That is the athwartships case documented in the bring-up guide: RF1 left / RF2 right
   needs -9000, the mirror mount needs +9000.
 
+## Confirmed on hardware (2026-09-08/09, robot, cold start)
+
+- **After the receiver has been unpowered for hours it ACKs the startup CFG-VALSET and does
+  not apply it.** DEBUG run of 2026-09-08 09:58 (`component_container_mt_7248_...`): the
+  single 8-key VALSET was ACK-ACKed 267 ms after it was sent - *after* 16 of the 18 CFG-VALGET
+  ACKs of the parameter sweep - with zero NAKs, every VALGET answered, and the default NMEA
+  set (`GGA/GLL/GSA/GSV/RMC/VTG/THS`, ~46 sentences/s) kept streaming; `CFG_MSGOUT_UBX_NAV_*`
+  stayed 0, so `gps/fix` and `heading/imu` never published. Three driver restarts over
+  11 minutes on 2026-09-09 (09:27, 09:29, 09:32) behaved identically; a USB unplug/replug
+  cleared it at once and on 2026-09-08 it cleared by itself after ~30 min with no USB event.
+  ModemManager was probing `ttyACM0` during the *successful* run, so it is not the cause.
+- The old startup path (`ublox_send_user_params_async`, fire-and-forget, ACK-ACK logged at
+  DEBUG, ACK-NAK a WARN with the retry commented out, no readback, no watchdog) could not
+  see this. It is replaced by the config engine (`config_engine.hpp`): MON-VER handshake,
+  one CFG-VALSET in flight, CFG-VALGET readback of every user key from the RAM layer, and a
+  ladder when the readback disagrees - rung a transactionless retries with backoff
+  (0.5/1/2/4 s), rung b the same keys as a configuration transaction (start ... apply; the
+  interface description says a transaction from another source aborts a foreign one and
+  unlocks the config database), rung c UBX-CFG-RST controlled software reset with hot start
+  (`resetMode` from `CONFIG_ENGINE_RESET_MODE`, default 0x01; 0x00 is the hardware reset,
+  closer to the replug), rung d one attempt every 30 s at ERROR level. Watch the log for
+  `user configuration verified on device (8 keys)` (healthy) or `config NOT applied on
+  device (rung a, attempt n/4): KEY expected X got Y` and the rung lines. **Which rung
+  clears a real cold start is still to be observed** - record it here.
+- **CFG-VALGET parser bug** (fixed): `CfgValGetPayload` built the 8-byte `value_t` from a
+  single byte, so every multi-byte value read back truncated to its low byte
+  (`CFG_RATE_MEAS` 1000 -> 232, `CFG_NAVSPG_DAHEADING_OFFSET` -9000 -> 0xD8). Nobody
+  noticed because user keys were never read back; `test_cfg_valget_parse` pins it.
+- `$GNTHS` keeps arriving once per second with `CFG_USBOUTPROT_NMEA=false` - the heading
+  sentence bypasses the port protocol switch on HDG 2.00. Harmless; the engine's NMEA
+  watchdog tolerates 3 sentences/s (`CONFIG_ENGINE_NMEA_WATCHDOG_PER_S`; a 5 s window
+  sometimes counts 6 THS sentences, and 1.0 tripped a false re-verify on the bench).
+- On a USB re-attach the old `reset_device_parameters()` dropped every `ros2 param set`
+  value (it tested the *status*, which is `PARAM_VALSET` after a send); it now keeps every
+  key whose *source* is the user and the engine re-applies them.
+
 ## Still open
 
-- The startup CFG-VALGET fetch is also sent in bursts; one DEBUG run logged
-  `Missing response` for six keys and the driver ran degraded for them (harmless, but an
-  ACK-paced sender would remove the race for both VALGET and VALSET).
+- **The process aborts on exit** (`exit code -6`, `malloc_consolidate(): unaligned fastbin
+  chunk detected`, a core in the CWD) - seen on every session since 2026-09-04, i.e. before
+  the config engine. `Connection::shutdown()` used to run three times from two threads
+  (rclcpp `on_shutdown` hook, node destructor, `~Connection`) and the core of 2026-09-09
+  12:58 showed the second `libusb_close()` on the same handle; that is now guarded
+  (idempotent, mutex), and the next core shows the corruption being detected later, in
+  Fast-DDS static teardown (`TypeObjectFactory::delete_instance` -> `free`). So the heap is
+  corrupted earlier by something else; candidates: `ublox_in_callback` writes `buf[len] = 0`
+  one past `actual_length`, and the transfer cleanup in `close_devh()`. Needs an ASan build
+  in the dev container. Harmless for operation (it only happens at exit) but it leaves
+  60-100 MB cores behind.
+- The startup CFG-VALGET sweep is still sent as a burst of ~18 frames; it now runs only
+  after the user keys are verified, so it no longer races the VALSET, but one DEBUG run
+  had logged `Missing response` for six keys (degraded mode, harmless). Pacing it one
+  request at a time is the remaining clean-up.
 - Offset sign on the robot: the bench had the baseline along the heading; an athwartships
   mount needs +/-9000 as described in the bring-up guide.
 

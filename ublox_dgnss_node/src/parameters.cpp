@@ -237,6 +237,24 @@ void ParameterManager::reset_device_parameters()
   size_t params_invalidated = 0;
 
   for (auto & [param_name, p_state] : param_cache_map_) {
+    /* TODO: Review - Original predicate commented out. It keyed off the status, but a
+     * runtime `ros2 param set` value is PARAM_VALSET after the batch send (and
+     * PARAM_VERIFIED once the config engine read it back), so every user value that was
+     * not a launch argument was silently dropped at the next USB re-attach.
+    if (p_state.param_status != PARAM_USER) {
+    */
+    // TODO(Review) - New predicate keys off the value source: anything the user set is
+    // kept (status back to PARAM_USER so the engine re-applies it), device data is reset.
+    const bool user_owned = p_state.param_value.has_value() &&
+      (p_state.param_source == ParamValueSource::START_ARG ||
+      p_state.param_source == ParamValueSource::RUNTIME_USER);
+    if (user_owned) {
+      if (p_state.param_status != PARAM_ACKNAK) {
+        p_state.param_status = PARAM_USER;
+      }
+      p_state.needs_device_send = false;
+      continue;
+    }
     // Invalidate parameters that came from device but weren't overridden by user
     if (p_state.param_status != PARAM_USER) {
       RCLCPP_DEBUG(
@@ -259,6 +277,47 @@ void ParameterManager::reset_device_parameters()
   }
 
   RCLCPP_WARN(logger_, "Reset %zu device parameters", params_invalidated);
+}
+
+std::vector<std::string> ParameterManager::get_user_parameters()
+{
+  std::lock_guard<std::mutex> lock(param_cache_mutex_);
+  std::vector<std::string> names;
+  for (const auto & [param_name, p_state] : param_cache_map_) {
+    if (!p_state.param_value.has_value()) {continue;}
+    if (p_state.param_status == PARAM_ACKNAK) {continue;}
+    if (p_state.param_source == ParamValueSource::START_ARG ||
+      p_state.param_source == ParamValueSource::RUNTIME_USER)
+    {
+      names.push_back(param_name);
+    }
+  }
+  return names;
+}
+
+void ParameterManager::mark_parameters_verified(const std::vector<std::string> & param_names)
+{
+  std::lock_guard<std::mutex> lock(param_cache_mutex_);
+  for (const auto & name : param_names) {
+    auto it = param_cache_map_.find(name);
+    if (it == param_cache_map_.end() || !it->second.param_value.has_value()) {continue;}
+    if (it->second.param_source == ParamValueSource::UNKNOWN) {continue;}
+    it->second.param_status = PARAM_VERIFIED;
+    it->second.needs_device_send = false;
+    it->second.last_modified = std::chrono::steady_clock::now();
+  }
+}
+
+void ParameterManager::mark_parameters_acknak(const std::vector<std::string> & param_names)
+{
+  std::lock_guard<std::mutex> lock(param_cache_mutex_);
+  for (const auto & name : param_names) {
+    auto it = param_cache_map_.find(name);
+    if (it == param_cache_map_.end()) {continue;}
+    it->second.param_status = PARAM_ACKNAK;
+    it->second.needs_device_send = false;
+    it->second.last_modified = std::chrono::steady_clock::now();
+  }
 }
 
 void ParameterManager::parameter_processing_callback()
@@ -324,9 +383,13 @@ void ParameterManager::log_parameter_cache_state()
   size_t valset_params = 0;
   size_t valget_params = 0;
   size_t acknak_params = 0;
+  size_t verified_params = 0;
 
   for (const auto & [param_name, p_state] : param_cache_map_) {
     switch (p_state.param_status) {
+      case PARAM_VERIFIED:
+        verified_params++;
+        break;
       case PARAM_INITIAL:
         initial_params++;
         break;
@@ -353,8 +416,10 @@ void ParameterManager::log_parameter_cache_state()
   RCLCPP_DEBUG(
     logger_,
     "Parameter cache state - " \
-    "Total: %zu, Initial: %zu, User: %zu, Loaded: %zu, Valset: %zu, Valget: %zu",
-    total_params, initial_params, user_params, loaded_params, valset_params, valget_params);
+    "Total: %zu, Initial: %zu, User: %zu, Loaded: %zu, Valset: %zu, Valget: %zu, " \
+    "Verified: %zu, AckNak: %zu",
+    total_params, initial_params, user_params, loaded_params, valset_params, valget_params,
+    verified_params, acknak_params);
 }
 
 bool ParameterManager::is_valid_parameter(const std::string & param_name)

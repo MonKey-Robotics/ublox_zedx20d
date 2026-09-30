@@ -147,8 +147,14 @@ as applied (`user configuration verified on device (N keys)` in the log). A read
 disagrees walks a ladder - retries with backoff, the same keys as a configuration transaction,
 UBX-CFG-RST (hot start) and re-apply, then one attempt every 30 s forever - each rung logged
 at WARN/ERROR. A runtime watchdog re-verifies when no UBX-NAV message arrives or NMEA keeps
-streaming although `CFG_USBOUTPROT_NMEA` is false. Per-sentence NMEA logging moved to DEBUG;
-INFO gets a throttled `nmea: N sentences in 5.0 s, last: ...` summary.
+streaming although `CFG_USBOUTPROT_NMEA` is false. Per-sentence NMEA logging is DEBUG, and so
+is the `nmea: N sentences in 5.0 s, last: ...` summary (on the X20D the `$GNTHS` leak made it
+fire every 5 s forever); a real NMEA stream still trips the watchdog WARN.
+
+Steady-state logging is quiet at INFO: after the startup lines (MON-VER, `user configuration
+verified on device`, `Parameter fetch completed`) only warnings and errors appear. Device echoes
+of the CFG sweep, the CFG-VALGET chunk lists and similar detail are DEBUG; an absent device logs
+one INFO and then a WARN every 10 s; per-frame "unknown class/id" WARNs are throttled to 10 s.
 
 | Parameter | Default | Meaning |
 |---|---|---|
@@ -166,13 +172,33 @@ INFO gets a throttled `nmea: N sentences in 5.0 s, last: ...` summary.
 | `CONFIG_ENGINE_NAV_WATCHDOG_S` | `5.0` | no UBX-NAV for this long (at least 3 nav periods) trips the watchdog |
 | `CONFIG_ENGINE_NMEA_WATCHDOG_PER_S` | `3.0` | NMEA rate tolerated with NMEA disabled (`$GNTHS` leaks at 1/s; the unapplied default set is ~46/s) |
 | `CONFIG_ENGINE_WATCHDOG_MIN_INTERVAL_S` | `30.0` | minimum gap between watchdog trips |
-| `NMEA_SUMMARY_PERIOD_S` | `5.0` | INFO NMEA summary period |
+| `NMEA_SUMMARY_PERIOD_S` | `5.0` | DEBUG NMEA summary period |
 
 ### UBX Parameters
 
 The following parameters may be set. Its a subset of the full UBX Gen 9 configuration parameter list.
 
 Values will be as described in the integration manual (without scaling applied). Changing a CFG_MSGOUT_* type parameter to a value >0 will cause the corresponding ublox_ubx_msgs to be published.
+
+### Topic switches (`publish.<topic>`)
+
+Every UBX output topic has a bool node parameter `publish.<topic>` (ZED-wrapper style, e.g.
+`publish.ubx_nav_pvt`, `publish.rtcm`), default `true`. `false` means the publisher is never
+created, so the topic does not appear in `ros2 topic list`. The switches are read once at
+startup. They are independent of `CFG_MSGOUT_*`: that key decides whether the *receiver* sends
+the message over USB (bandwidth), `publish.*` whether the *node* advertises it. A topic needs
+both. Disabling a topic never disables parsing, so the configuration watchdog still sees NAV
+traffic. The family gates still apply on top (`ubx_nav_da_heading` X20D only, `ubx_nav_odo`
+F9P/F9R only, `ubx_rxm_spartn` X20P only). The startup log names the disabled topics in one
+line.
+
+``` yaml
+/**/ublox_dgnss:
+  ros__parameters:
+    publish:
+      ubx_nav_pvt: false
+      ubx_rxm_rawx: false
+```
 
   CFG_INFMSG_NMEA_USB
   CFG_INFMSG_UBX_USB

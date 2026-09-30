@@ -50,9 +50,10 @@ Steps 1-4 were completed on a simpleRTK4 Dual on 2026-09-04 (see
    - The node must log `Device family: X20D ...` and reach CONNECTED.
    - A healthy start logs, within a few seconds: `receiver MON-VER: ... FWVER=HDG 2.00
      PROTVER=57.02`, `user configuration verified on device (N keys)`, then
-     `Parameter fetch completed successfully`. NMEA shows up only as a throttled
-     `nmea: N sentences in 5.0 s, last: $GNTHS,...` line (one sentence/s is the normal
-     THS leak; dozens/s mean the configuration is not applied).
+     `Parameter fetch completed successfully`. NMEA shows up only at DEBUG
+     (`--log-level ublox_dgnss:=debug`) as a `nmea: N sentences in 5.0 s, last: $GNTHS,...`
+     line (one sentence/s is the normal THS leak; dozens/s mean the configuration is not
+     applied, and trip the watchdog WARN).
    - `config NOT applied on device (rung a, attempt n/4): ...` followed by `rung b` /
      `rung c` lines is the engine working through the cold-start condition; note which
      rung ends it and record it in the port notes.

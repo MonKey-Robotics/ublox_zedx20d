@@ -223,81 +223,153 @@ public:
     rclcpp::PublisherOptions pub_options;
     pub_options.qos_overriding_options = rclcpp::QosOverridingOptions::with_default_policies();
 
-    ubx_nav_clock_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavClock>(
-      "ubx_nav_clock", qos, pub_options);
-    ubx_nav_cov_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavCov>(
-      "ubx_nav_cov", qos, pub_options);
+    // TODO: Review - ZED-wrapper-style per-topic switches: publish.<topic> (bool, default
+    // true). false = the publisher is never created, so the topic does not exist. The UBX
+    // frame is still parsed (config-engine NAV watchdog), and the receiver still sends it
+    // unless its CFG_MSGOUT_* key is also 0 -- the two switches are independent.
+    if (publish_enabled("ubx_nav_clock")) {  // TODO: Review
+      ubx_nav_clock_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavClock>(
+        "ubx_nav_clock", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_cov")) {  // TODO: Review
+      ubx_nav_cov_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavCov>(
+        "ubx_nav_cov", qos, pub_options);
+    }
     // Dual-antenna heading (NAV-DAHEADING) only supported on the X20D
-    if (device_family_ == ublox_dgnss::DeviceFamily::X20D) {
+    // TODO: Review - AND publish.ubx_nav_da_heading
+    if (device_family_ == ublox_dgnss::DeviceFamily::X20D &&
+      publish_enabled("ubx_nav_da_heading"))
+    {
       ubx_nav_da_heading_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavDAHeading>(
         "ubx_nav_da_heading", qos, pub_options);
     }
-    ubx_nav_dop_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavDOP>(
-      "ubx_nav_dop", qos, pub_options);
-    ubx_nav_eoe_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavEOE>(
-      "ubx_nav_eoe", qos, pub_options);
-    ubx_nav_hp_pos_ecef_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavHPPosECEF>(
-      "ubx_nav_hp_pos_ecef", qos, pub_options);
-    ubx_nav_hp_pos_llh_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavHPPosLLH>(
-      "ubx_nav_hp_pos_llh", qos, pub_options);
+    if (publish_enabled("ubx_nav_dop")) {  // TODO: Review
+      ubx_nav_dop_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavDOP>(
+        "ubx_nav_dop", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_eoe")) {  // TODO: Review
+      ubx_nav_eoe_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavEOE>(
+        "ubx_nav_eoe", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_hp_pos_ecef")) {  // TODO: Review
+      ubx_nav_hp_pos_ecef_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavHPPosECEF>(
+        "ubx_nav_hp_pos_ecef", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_hp_pos_llh")) {  // TODO: Review
+      ubx_nav_hp_pos_llh_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavHPPosLLH>(
+        "ubx_nav_hp_pos_llh", qos, pub_options);
+    }
     // Odometer (NAV-ODO) only supported on F9P/F9R (removed in X20P HPG 2.10)
-    if (device_family_ == ublox_dgnss::DeviceFamily::F9P ||
-      device_family_ == ublox_dgnss::DeviceFamily::F9R)
+    // TODO: Review - AND publish.ubx_nav_odo
+    if ((device_family_ == ublox_dgnss::DeviceFamily::F9P ||
+      device_family_ == ublox_dgnss::DeviceFamily::F9R) &&
+      publish_enabled("ubx_nav_odo"))
     {
       ubx_nav_odo_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavOdo>(
         "ubx_nav_odo", qos, pub_options);
     }
-    ubx_nav_orb_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavOrb>(
-      "ubx_nav_orb", qos, pub_options);
-    ubx_nav_sat_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavSat>(
-      "ubx_nav_sat", qos, pub_options);
-    ubx_nav_sig_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavSig>(
-      "ubx_nav_sig", qos, pub_options);
-    ubx_nav_pos_ecef_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavPosECEF>(
-      "ubx_nav_pos_ecef", qos, pub_options);
-    ubx_nav_pos_llh_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavPosLLH>(
-      "ubx_nav_pos_llh", qos, pub_options);
-    ubx_nav_pvt_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavPVT>(
-      "ubx_nav_pvt", qos, pub_options);
-    ubx_nav_rel_pos_ned_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavRelPosNED>(
-      "ubx_nav_rel_pos_ned", qos, pub_options);
-    ubx_nav_status_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavStatus>(
-      "ubx_nav_status", qos, pub_options);
-    ubx_nav_svin_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavSvin>(
-      "ubx_nav_svin", qos, pub_options);
-    ubx_nav_time_utc_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavTimeUTC>(
-      "ubx_nav_time_utc", qos, pub_options);
-    ubx_nav_vel_ecef_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavVelECEF>(
-      "ubx_nav_vel_ecef", qos, pub_options);
-    ubx_nav_vel_ned_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavVelNED>(
-      "ubx_nav_vel_ned", qos, pub_options);
-    ubx_rxm_cor_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXRxmCor>(
-      "ubx_rxm_cor", qos, pub_options);
-    ubx_rxm_rtcm_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXRxmRTCM>(
-      "ubx_rxm_rtcm", qos, pub_options);
-    ubx_rxm_measx_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXRxmMeasx>(
-      "ubx_rxm_measx", qos, pub_options);
-    ubx_rxm_rawx_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXRxmRawx>(
-      "ubx_rxm_rawx", qos, pub_options);
-    ubx_rxm_sfrbx_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXRxmSfrbx>(
-      "ubx_rxm_sfrbx", qos, pub_options);
+    if (publish_enabled("ubx_nav_orb")) {  // TODO: Review
+      ubx_nav_orb_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavOrb>(
+        "ubx_nav_orb", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_sat")) {  // TODO: Review
+      ubx_nav_sat_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavSat>(
+        "ubx_nav_sat", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_sig")) {  // TODO: Review
+      ubx_nav_sig_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavSig>(
+        "ubx_nav_sig", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_pos_ecef")) {  // TODO: Review
+      ubx_nav_pos_ecef_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavPosECEF>(
+        "ubx_nav_pos_ecef", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_pos_llh")) {  // TODO: Review
+      ubx_nav_pos_llh_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavPosLLH>(
+        "ubx_nav_pos_llh", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_pvt")) {  // TODO: Review
+      ubx_nav_pvt_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavPVT>(
+        "ubx_nav_pvt", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_rel_pos_ned")) {  // TODO: Review
+      ubx_nav_rel_pos_ned_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavRelPosNED>(
+        "ubx_nav_rel_pos_ned", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_status")) {  // TODO: Review
+      ubx_nav_status_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavStatus>(
+        "ubx_nav_status", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_svin")) {  // TODO: Review
+      ubx_nav_svin_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavSvin>(
+        "ubx_nav_svin", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_time_utc")) {  // TODO: Review
+      ubx_nav_time_utc_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavTimeUTC>(
+        "ubx_nav_time_utc", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_vel_ecef")) {  // TODO: Review
+      ubx_nav_vel_ecef_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavVelECEF>(
+        "ubx_nav_vel_ecef", qos, pub_options);
+    }
+    if (publish_enabled("ubx_nav_vel_ned")) {  // TODO: Review
+      ubx_nav_vel_ned_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXNavVelNED>(
+        "ubx_nav_vel_ned", qos, pub_options);
+    }
+    if (publish_enabled("ubx_rxm_cor")) {  // TODO: Review
+      ubx_rxm_cor_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXRxmCor>(
+        "ubx_rxm_cor", qos, pub_options);
+    }
+    if (publish_enabled("ubx_rxm_rtcm")) {  // TODO: Review
+      ubx_rxm_rtcm_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXRxmRTCM>(
+        "ubx_rxm_rtcm", qos, pub_options);
+    }
+    if (publish_enabled("ubx_rxm_measx")) {  // TODO: Review
+      ubx_rxm_measx_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXRxmMeasx>(
+        "ubx_rxm_measx", qos, pub_options);
+    }
+    if (publish_enabled("ubx_rxm_rawx")) {  // TODO: Review
+      ubx_rxm_rawx_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXRxmRawx>(
+        "ubx_rxm_rawx", qos, pub_options);
+    }
+    if (publish_enabled("ubx_rxm_sfrbx")) {  // TODO: Review
+      ubx_rxm_sfrbx_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXRxmSfrbx>(
+        "ubx_rxm_sfrbx", qos, pub_options);
+    }
     // RXM-SPARTN status output is only relevant on the X20P
-    if (device_family_ == ublox_dgnss::DeviceFamily::X20P) {
+    // TODO: Review - AND publish.ubx_rxm_spartn
+    if (device_family_ == ublox_dgnss::DeviceFamily::X20P &&
+      publish_enabled("ubx_rxm_spartn"))
+    {
       ubx_rxm_spartn_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXRxmSpartn>(
         "ubx_rxm_spartn", qos, pub_options);
     }
-    ubx_esf_status_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXEsfStatus>(
-      "ubx_esf_status", qos, pub_options);
-    ubx_esf_meas_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXEsfMeas>(
-      "ubx_esf_meas", qos, pub_options);
-    ubx_mon_comms_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXMonComms>(
-      "ubx_mon_comms", qos, pub_options);
-    ubx_sec_sig_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXSecSig>(
-      "ubx_sec_sig", qos, pub_options);
-    ubx_sec_sig_log_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXSecSigLog>(
-      "ubx_sec_sig_log", qos, pub_options);
-    rtcm_pub_ = this->create_publisher<rtcm_msgs::msg::Message>(
-      "rtcm", 10);
+    if (publish_enabled("ubx_esf_status")) {  // TODO: Review
+      ubx_esf_status_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXEsfStatus>(
+        "ubx_esf_status", qos, pub_options);
+    }
+    if (publish_enabled("ubx_esf_meas")) {  // TODO: Review
+      ubx_esf_meas_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXEsfMeas>(
+        "ubx_esf_meas", qos, pub_options);
+    }
+    if (publish_enabled("ubx_mon_comms")) {  // TODO: Review
+      ubx_mon_comms_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXMonComms>(
+        "ubx_mon_comms", qos, pub_options);
+    }
+    if (publish_enabled("ubx_sec_sig")) {  // TODO: Review
+      ubx_sec_sig_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXSecSig>(
+        "ubx_sec_sig", qos, pub_options);
+    }
+    if (publish_enabled("ubx_sec_sig_log")) {  // TODO: Review
+      ubx_sec_sig_log_pub_ = this->create_publisher<ublox_ubx_msgs::msg::UBXSecSigLog>(
+        "ubx_sec_sig_log", qos, pub_options);
+    }
+    if (publish_enabled("rtcm")) {  // TODO: Review
+      rtcm_pub_ = this->create_publisher<rtcm_msgs::msg::Message>(
+        "rtcm", 10);
+    }
+
+    log_disabled_publishers();  // TODO: Review
 
     // ros2 parameter call backs
     parameters_callback_handle_ =
@@ -478,7 +550,18 @@ public:
   void perform_usb_initialization(bool from_timer = false)
   {
     if (from_timer) {
+      /* TODO: Review - Original: logged every 10 ms while the device is absent.
       RCLCPP_INFO(get_logger(), "Starting USB initialization");
+      */
+      // TODO: Review - first attempt at INFO, then a throttled WARN while it keeps failing
+      if (usb_init_attempts_++ == 0) {
+        RCLCPP_INFO(get_logger(), "Starting USB initialization");
+      } else {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 10000,
+          "%s receiver not found on USB - retrying (%lu attempts)",
+          device_family_str_.c_str(), static_cast<unsigned long>(usb_init_attempts_));
+      }
     } else {
       RCLCPP_INFO(get_logger(), "Starting USB initialization (from hotplug)");
     }
@@ -503,6 +586,7 @@ public:
       ublox_dgnss_init_async();
 
       RCLCPP_INFO(get_logger(), "USB initialization completed successfully");
+      usb_init_attempts_ = 0;  // TODO: Review
 
       // Disable timer once connected and initialized
       if (usb_init_timer_) {
@@ -674,6 +758,7 @@ private:
 
 // once the usb is initialised this timer is disabled
   rclcpp::TimerBase::SharedPtr usb_init_timer_;
+  uint64_t usb_init_attempts_ = 0;  // TODO: Review - throttles the absent-device retry log
 
   std::shared_ptr<ParameterManager> parameter_manager_;
 
@@ -750,6 +835,7 @@ private:
   rclcpp::Publisher<ublox_ubx_msgs::msg::UBXSecSig>::SharedPtr ubx_sec_sig_pub_;
   rclcpp::Publisher<ublox_ubx_msgs::msg::UBXSecSigLog>::SharedPtr ubx_sec_sig_log_pub_;
   rclcpp::Publisher<rtcm_msgs::msg::Message>::SharedPtr rtcm_pub_;
+  std::vector<std::string> disabled_publishers_;  // TODO: Review - publish.<topic>:=false
 
   rclcpp::Subscription<ublox_ubx_msgs::msg::UBXEsfMeas>::SharedPtr ubx_esf_meas_sub_;
   rclcpp::Subscription<rtcm_msgs::msg::Message>::SharedPtr rtcm_sub_;
@@ -1181,6 +1267,8 @@ public:
 
         auto name = parameter.get_name();
         if (parameter_manager_->is_valid_parameter(name)) {
+          // TODO: Review - device echoes / init-time sets log at DEBUG (hundreds per connect)
+          bool user_change = false;
           // if its initialising just put out a debug message
           if (is_initialising_) {
             auto maybe_state = parameter_manager_->get_parameter_state(name);
@@ -1228,6 +1316,7 @@ public:
                     ParamValueSource::DEVICE_ACTUAL);
                 } else {
                   // This is a real user change
+                  user_change = true;  // TODO: Review
                   RCLCPP_DEBUG(
                     get_logger(),
                     "parameter set %s: %s - source: %s old status from: %s to: PARAM_USER",
@@ -1263,9 +1352,20 @@ public:
             }
           }
 
+          /* TODO: Review - Original: INFO for every set, including device echoes.
           RCLCPP_INFO(
             get_logger(), "parameter set %s: %s",
             name.c_str(), parameter.value_to_string().c_str());
+          */
+          if (user_change) {
+            RCLCPP_INFO(
+              get_logger(), "parameter set %s: %s",
+              name.c_str(), parameter.value_to_string().c_str());
+          } else {
+            RCLCPP_DEBUG(
+              get_logger(), "parameter set %s: %s",
+              name.c_str(), parameter.value_to_string().c_str());
+          }
         } else {
           RCLCPP_DEBUG(
             get_logger(), "Skipping unknown parameter: %s",
@@ -1497,6 +1597,39 @@ public:
   // enabled AND (no family restriction OR the device family matches). A family mismatch
   // only warns when the param was explicitly set, so default-enabled inputs (e.g. ESF on
   // a non-F9R) do not spam a warning at every startup.
+  // TODO: Review - publish.<topic> switch (ZED-wrapper style), default true. Same
+  // has->declare->get pattern as should_create_input_sub(): the param may already exist
+  // via automatically_declare_parameters_from_overrides.
+  UBLOX_DGNSS_NODE_LOCAL
+  bool publish_enabled(const std::string & topic)
+  {
+    const std::string param = "publish." + topic;
+    if (!this->has_parameter(param)) {
+      this->declare_parameter<bool>(param, true);
+    }
+    bool enabled = this->get_parameter(param).as_bool();
+    if (!enabled) {
+      disabled_publishers_.push_back(topic);
+    }
+    return enabled;
+  }
+
+  // TODO: Review
+  UBLOX_DGNSS_NODE_LOCAL
+  void log_disabled_publishers()
+  {
+    if (disabled_publishers_.empty()) {
+      return;
+    }
+    std::string names;
+    for (const auto & t : disabled_publishers_) {
+      names += (names.empty() ? "" : ", ") + t;
+    }
+    RCLCPP_INFO(
+      get_logger(), "%zu ubx topic(s) disabled by publish.<topic>: %s",
+      disabled_publishers_.size(), names.c_str());
+  }
+
   UBLOX_DGNSS_NODE_LOCAL
   bool should_create_input_sub(
     const std::string & param, bool default_value,
@@ -1507,7 +1640,7 @@ public:
       this->declare_parameter<bool>(param, default_value);
     }
     bool enabled = this->get_parameter(param).as_bool();
-    RCLCPP_INFO(get_logger(), "input param %s: %s", param.c_str(), enabled ? "true" : "false");
+    RCLCPP_DEBUG(get_logger(), "input param %s: %s", param.c_str(), enabled ? "true" : "false");  // TODO: Review - was INFO
     if (!enabled) {
       return false;
     }
@@ -1718,8 +1851,9 @@ public:
 
     size_t num_transfer_in_queued = usbc_->queued_transfer_in_num();
     if (num_transfer_in_queued > 1) {
-      RCLCPP_WARN(
-        get_logger(), "too many transfer in transfers are queued (%lu)", num_transfer_in_queued);
+      RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per transfer
+        get_logger(), *get_clock(), 10000,
+        "too many transfer in transfers are queued (%lu)", num_transfer_in_queued);
     }
   }
 
@@ -2173,6 +2307,9 @@ private:
     msg->message = f->buf;
 
     // Publish the message
+    if (!rtcm_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     rtcm_pub_->publish(*msg);
   }
 
@@ -2231,8 +2368,8 @@ private:
         ubx_sec_in_frame(f);
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x unknown ... doing nothing", f->ubx_frame->msg_class);
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x unknown ... doing nothing", f->ubx_frame->msg_class);
     }
   }
 
@@ -2272,8 +2409,8 @@ private:
         ubx_sec_out_frame(f);
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "unkown class: 0x%02x unknown ... doing nothing", f->ubx_frame->msg_class);
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "unkown class: 0x%02x unknown ... doing nothing", f->ubx_frame->msg_class);
     }
   }
 
@@ -2301,8 +2438,8 @@ private:
           f->ubx_frame->msg_id);
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
           f->ubx_frame->msg_class,
           f->ubx_frame->msg_id);
     }
@@ -2319,8 +2456,8 @@ private:
           f->ubx_frame->msg_id);
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
           f->ubx_frame->msg_class,
           f->ubx_frame->msg_id);
     }
@@ -2445,8 +2582,8 @@ private:
           f->ubx_frame->msg_id);
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
           f->ubx_frame->msg_class,
           f->ubx_frame->msg_id);
     }
@@ -2511,8 +2648,8 @@ private:
           f->ubx_frame->msg_id);
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
           f->ubx_frame->msg_class,
           f->ubx_frame->msg_id);
     }
@@ -2535,8 +2672,8 @@ private:
           f->ubx_frame->msg_id);
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
           f->ubx_frame->msg_class,
           f->ubx_frame->msg_id);
     }
@@ -2564,8 +2701,8 @@ private:
           f->ubx_frame->msg_id);
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
           f->ubx_frame->msg_class,
           f->ubx_frame->msg_id);
     }
@@ -2611,8 +2748,8 @@ private:
         // }
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
           f->ubx_frame->msg_class,
           f->ubx_frame->msg_id);
     }
@@ -2641,8 +2778,8 @@ private:
         }
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
           f->ubx_frame->msg_class,
           f->ubx_frame->msg_id);
     }
@@ -2739,6 +2876,9 @@ private:
       msg->ports.push_back(port);
     }
 
+    if (!ubx_mon_comms_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_mon_comms_pub_->publish(std::move(msg));
   }
 
@@ -2754,8 +2894,8 @@ private:
         ubx_mon_comms_pub(f, ubx_mon_->comms()->payload());
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
           f->ubx_frame->msg_class,
           f->ubx_frame->msg_id);
     }
@@ -2798,8 +2938,8 @@ private:
           ubx_inf_->warning()->payload()->to_string().c_str());
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
           f->ubx_frame->msg_class,
           f->ubx_frame->msg_id);
     }
@@ -2872,8 +3012,8 @@ private:
         ubx_nav_vel_ned_pub(f, ubx_nav_->velned()->payload());
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
           f->ubx_frame->msg_class,
           f->ubx_frame->msg_id);
     }
@@ -2908,8 +3048,8 @@ private:
         ubx_rxm_spartn_pub(f, ubx_rxm_->spartn()->payload());
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
           f->ubx_frame->msg_class,
           f->ubx_frame->msg_id);
     }
@@ -2928,8 +3068,8 @@ private:
         ubx_esf_meas_pub(f, ubx_esf_->meas()->payload());
         break;
       default:
-        RCLCPP_WARN(
-          get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+        RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+          get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
           f->ubx_frame->msg_class,
           f->ubx_frame->msg_id);
     }
@@ -2966,15 +3106,15 @@ private:
           } else {
             declare_parameter("unique_id", unique_id_);
           }
-          RCLCPP_INFO(
+          RCLCPP_DEBUG(  // TODO: Review - was INFO
             get_logger(), "ubx sec unique_id: 0x%s",
             unique_id_.c_str());
           // ubx_sec_uniqid_pub(f, ubx_sec_->uniqid()->payload());
           break;
         }
       default: {
-          RCLCPP_WARN(
-            get_logger(), "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
+          RCLCPP_WARN_THROTTLE(  // TODO: Review - was unthrottled, fires per frame
+            get_logger(), *get_clock(), 10000, "ubx class: 0x%02x id: 0x%02x unknown ... doing nothing",
             f->ubx_frame->msg_class,
             f->ubx_frame->msg_id);
         }
@@ -3000,6 +3140,9 @@ private:
     msg->ecef_vz = payload->ecefVZ;
     msg->s_acc = payload->sAcc;
 
+    if (!ubx_nav_vel_ecef_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_vel_ecef_pub_->publish(*msg);
   }
 
@@ -3026,6 +3169,9 @@ private:
     msg->s_acc = payload->sAcc;
     msg->c_acc = payload->cAcc;
 
+    if (!ubx_nav_vel_ned_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_vel_ned_pub_->publish(*msg);
   }
 
@@ -3056,6 +3202,9 @@ private:
     msg->valid_utc = payload->valid.bits.validUTC;
     msg->utc_std.id = payload->valid.bits.utcStandard;
 
+    if (!ubx_nav_time_utc_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_time_utc_pub_->publish(*msg);
   }
 
@@ -3098,6 +3247,9 @@ private:
     msg->rel_pos_heading_valid = payload->flags.bits.relPosHeadingValid;
     msg->rel_pos_normalized = payload->flags.bits.relPosNormalized;
 
+    if (!ubx_nav_rel_pos_ned_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_rel_pos_ned_pub_->publish(*msg);
   }
 
@@ -3153,6 +3305,9 @@ private:
     msg->mag_dec = payload->magDec;
     msg->mag_acc = payload->magAcc;
 
+    if (!ubx_nav_pvt_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_pvt_pub_->publish(*msg);
   }
 
@@ -3176,6 +3331,9 @@ private:
     msg->h_acc = payload->hAcc;
     msg->v_acc = payload->vAcc;
 
+    if (!ubx_nav_pos_llh_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_pos_llh_pub_->publish(*msg);
   }
 
@@ -3197,6 +3355,9 @@ private:
     msg->ecef_z = payload->ecefZ;
     msg->p_acc = payload->pAcc;
 
+    if (!ubx_nav_pos_ecef_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_pos_ecef_pub_->publish(*msg);
   }
 
@@ -3265,6 +3426,9 @@ private:
       msg->sv_info.push_back(sv_info_msg);
     }
 
+    if (!ubx_nav_orb_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_orb_pub_->publish(*msg);
   }
 
@@ -3320,6 +3484,9 @@ private:
       msg->sv_info.push_back(sv_info_msg);
     }
 
+    if (!ubx_nav_sat_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_sat_pub_->publish(*msg);
   }
 
@@ -3366,6 +3533,9 @@ private:
       msg->sig_data.push_back(sig_data_msg);
     }
 
+    if (!ubx_nav_sig_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_sig_pub_->publish(*msg);
   }
 
@@ -3403,6 +3573,9 @@ private:
     msg->h_acc = payload->hAcc;
     msg->v_acc = payload->vAcc;
 
+    if (!ubx_nav_hp_pos_llh_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_hp_pos_llh_pub_->publish(*msg);
   }
 
@@ -3434,6 +3607,9 @@ private:
     msg->invalid_ecef_y_hp = payload->flags.bits.invalid_ecefYHp;
     msg->invalid_ecef_z_hp = payload->flags.bits.invalid_ecefZHp;
 
+    if (!ubx_nav_hp_pos_ecef_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_hp_pos_ecef_pub_->publish(*msg);
   }
 
@@ -3466,6 +3642,9 @@ private:
     msg->ttff = payload->ttff;
     msg->msss = payload->msss;
 
+    if (!ubx_nav_status_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_status_pub_->publish(*msg);
   }
 
@@ -3496,6 +3675,9 @@ private:
     msg->valid = payload->valid;
     msg->active = payload->active;
 
+    if (!ubx_nav_svin_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_svin_pub_->publish(*msg);
   }
 
@@ -3514,6 +3696,9 @@ private:
     msg->header.stamp = f->ts;
     msg->itow = payload->iTOW;
 
+    if (!ubx_nav_eoe_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_eoe_pub_->publish(*msg);
   }
 
@@ -3539,6 +3724,9 @@ private:
     msg->n_dop = payload->nDOP;
     msg->e_dop = payload->eDOP;
 
+    if (!ubx_nav_dop_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_dop_pub_->publish(*msg);
   }
 
@@ -3572,6 +3760,9 @@ private:
     msg->vel_cov_ed = payload->velCovED;
     msg->vel_cov_dd = payload->velCovDD;
 
+    if (!ubx_nav_cov_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_cov_pub_->publish(*msg);
   }
 
@@ -3639,6 +3830,9 @@ private:
     msg->t_acc = payload->tAcc;
     msg->f_acc = payload->fAcc;
 
+    if (!ubx_nav_clock_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_nav_clock_pub_->publish(*msg);
   }
 
@@ -3679,6 +3873,9 @@ private:
     msg->status_info = status_info_msg;
 
     // Publish the message
+    if (!ubx_rxm_cor_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_rxm_cor_pub_->publish(*msg);
   }
 
@@ -3701,6 +3898,9 @@ private:
     msg->ref_station = payload->refStation;
     msg->msg_type = payload->msgType;
 
+    if (!ubx_rxm_rtcm_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_rxm_rtcm_pub_->publish(*msg);
   }
 
@@ -3752,6 +3952,9 @@ private:
     }
 
     // Publish the message
+    if (!ubx_rxm_measx_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_rxm_measx_pub_->publish(*msg);
   }
 
@@ -3804,6 +4007,9 @@ private:
     }
 
     // Publish the message
+    if (!ubx_rxm_rawx_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_rxm_rawx_pub_->publish(*msg);
   }
 
@@ -3838,6 +4044,9 @@ private:
     }
 
     // Publish the message
+    if (!ubx_rxm_sfrbx_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_rxm_sfrbx_pub_->publish(*msg);
   }
 
@@ -3911,6 +4120,9 @@ private:
       msg->sensor_statuses.push_back(*s_msg);
     }
 
+    if (!ubx_esf_status_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_esf_status_pub_->publish(*msg);
   }
 
@@ -3945,6 +4157,9 @@ private:
 
     if (msg->calib_ttag_valid) {
       msg->calib_ttag = payload->calibTtags;
+    }
+    if (!ubx_esf_meas_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
     }
     ubx_esf_meas_pub_->publish(*msg);
   }
@@ -3995,6 +4210,9 @@ private:
       msg->spoofing_state = payload->spf_flags.bits.spoofing_state;
     }
     // Publish the message
+    if (!ubx_sec_sig_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_sec_sig_pub_->publish(*msg);
   }
 
@@ -4029,6 +4247,9 @@ private:
     }
 
     // Publish the message
+    if (!ubx_sec_sig_log_pub_) {  // TODO: Review - publish.<topic>:=false
+      return;
+    }
     ubx_sec_sig_log_pub_->publish(*msg);
   }
 
@@ -4045,11 +4266,11 @@ private:
     }
 
     // Send ALL user parameters to device FIRST (highest priority)
-    RCLCPP_INFO(get_logger(), "Sending user parameters to device");
+    RCLCPP_DEBUG(get_logger(), "Sending user parameters to device");  // TODO: Review - was INFO
     ublox_send_user_params_async();
 
     // Fetch all PARAM_INITIAL values from device
-    RCLCPP_INFO(get_logger(), "Fetching configuration parameter values from device");
+    RCLCPP_DEBUG(get_logger(), "Fetching configuration parameter values from device");  // TODO: Review - was INFO
     ublox_fetch_device_params_async();
 
     RCLCPP_DEBUG(get_logger(), "finished ublox_init_all_cfg_items_async");
@@ -4169,7 +4390,7 @@ private:
           // every n keys send a request
           if (initial_params % n == 0) {
             if (ubx_cfg_->cfg_val_get_keys_size() > 0) {
-              RCLCPP_INFO(
+              RCLCPP_DEBUG(  // TODO: Review - was INFO
                 get_logger(), "cfg_val_get_poll_async_all_layers ... %s",
                 item_list.c_str());
               item_list = "";
@@ -4182,12 +4403,12 @@ private:
 
     // send the final requests
     if (ubx_cfg_->cfg_val_get_keys_size() > 0) {
-      RCLCPP_INFO(get_logger(), "cfg_val_get_poll_async_all_layers ... %s", item_list.c_str());
+      RCLCPP_DEBUG(get_logger(), "cfg_val_get_poll_async_all_layers ... %s", item_list.c_str());  // TODO: Review - was INFO
       ubx_cfg_->cfg_val_get_poll_async_all_layers();
       ubx_cfg_->cfg_val_get_keys_clear();
     }
 
-    RCLCPP_INFO(
+    RCLCPP_DEBUG(  // TODO: Review - was INFO
       get_logger(), "Requested %zu device parameter values via CFG-VALGET",
       initial_params);
   }
@@ -4648,7 +4869,7 @@ private:
           config_engine_send_valget_verify(a.keys);
           break;
         case ActionType::START_SWEEP:
-          RCLCPP_INFO(get_logger(), "Fetching configuration parameter values from device");
+          RCLCPP_DEBUG(get_logger(), "Fetching configuration parameter values from device");  // TODO: Review - was INFO
           ublox_fetch_device_params_async();
           break;
         case ActionType::SEND_CFG_RST:
@@ -4907,7 +5128,7 @@ private:
   UBLOX_DGNSS_NODE_LOCAL
   void ublox_dgnss_init_async()
   {
-    RCLCPP_INFO(get_logger(), "ublox_dgnss_init_async start");
+    RCLCPP_DEBUG(get_logger(), "ublox_dgnss_init_async start");  // TODO: Review - was INFO
     if (!config_engine_enabled_) {
       // the config engine polls MON-VER itself as its readiness handshake
       RCLCPP_DEBUG(get_logger(), "ubx_mon_ver poll_async ...");
@@ -4975,7 +5196,7 @@ private:
     // RCLCPP_INFO(get_logger(), "ubx_nav_velned poll_async ...");
     // ubx_nav_->velned()->poll_async();
 
-    RCLCPP_INFO(get_logger(), "ublox_dgnss_init_async finished");
+    RCLCPP_DEBUG(get_logger(), "ublox_dgnss_init_async finished");  // TODO: Review - was INFO
   }
 };
 }  // namespace ublox_dgnss

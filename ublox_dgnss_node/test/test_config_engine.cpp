@@ -522,9 +522,10 @@ TEST(ConfigEngine, nmea_leak_at_one_per_second_is_tolerated_and_summarised) {
       f.engine.on_nmea(1, "$GNTHS,64.25,A", f.now);
     }
     auto acts = f.tick();
-    if (Fixture::has_log(acts, LogLevel::INFO, "nmea: ")) {
+    // TODO: Review - summary demoted INFO -> DEBUG (steady-state log noise)
+    if (Fixture::has_log(acts, LogLevel::DEBUG, "nmea: ")) {
       summary = true;
-      EXPECT_TRUE(Fixture::has_log(acts, LogLevel::INFO, "last: $GNTHS,64.25,A"));
+      EXPECT_TRUE(Fixture::has_log(acts, LogLevel::DEBUG, "last: $GNTHS,64.25,A"));
     }
     EXPECT_FALSE(Fixture::has_log(acts, LogLevel::WARN, "NMEA still streaming"));
   }

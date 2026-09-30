@@ -80,7 +80,7 @@ struct Params
   // makes a 5 s window count 6), the unapplied default set is ~46/s
   double nmea_watchdog_per_s = 3.0;
   double watchdog_min_interval_s = 30.0;  // minimum gap between two watchdog trips
-  double nmea_summary_period_s = 5.0;    // INFO summary period for NMEA traffic
+  double nmea_summary_period_s = 5.0;    // DEBUG summary period for NMEA traffic
 };
 
 enum class State
@@ -869,8 +869,15 @@ private:
     nmea_rate_ = elapsed > 0.0 ? static_cast<double>(nmea_count_) / elapsed : 0.0;
     nmea_window_closed_at_ = now;
     if (nmea_count_ > 0) {
+      /* TODO: Review - Original INFO: fired every 5 s forever on the X20D, whose HDG 2.00
+       * firmware leaks $GNTHS at 1/s through CFG-USBOUTPROT-NMEA=false. The watchdog still
+       * WARNs on a real NMEA stream; the per-window summary is diagnostics only.
       log(
         LogLevel::INFO, "nmea: " + std::to_string(nmea_count_) + " sentences in " +
+        fmt(elapsed) + " s, last: " + nmea_last_, out);
+      */
+      log(
+        LogLevel::DEBUG, "nmea: " + std::to_string(nmea_count_) + " sentences in " +
         fmt(elapsed) + " s, last: " + nmea_last_, out);
     }
     nmea_count_ = 0;
